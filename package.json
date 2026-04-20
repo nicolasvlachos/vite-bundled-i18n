@@ -1,7 +1,7 @@
 {
   "name": "vite-bundled-i18n",
   "private": false,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Route-aware i18n for Vite apps with typed keys, scope bundles, dictionary ownership, and compiled production output.",
   "type": "module",
   "types": "./dist/index.d.ts",
