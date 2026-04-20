@@ -405,27 +405,7 @@ describe('createI18n', () => {
     expect(instance.isNamespaceLoaded('en', 'cart')).toBe(true);
   });
 
-  it('handles 404 gracefully for skipped scope bundles', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    vi.mocked(globalThis.fetch).mockResolvedValue({
-      ok: false,
-      status: 404,
-      statusText: 'Not Found',
-    } as Response);
-
-    const instance = createI18n(baseConfig);
-    await instance.loadScope('en', 'feedback.index');
-
-    // Scope should be marked as loaded (silently)
-    expect(instance.isScopeLoaded('en', 'feedback.index')).toBe(true);
-    // No warning should have been logged
-    expect(warnSpy).not.toHaveBeenCalled();
-
-    warnSpy.mockRestore();
-  });
-
-  it('still errors on non-404 scope load failures', async () => {
+  it('errors on scope load failure', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     vi.mocked(globalThis.fetch).mockResolvedValue({

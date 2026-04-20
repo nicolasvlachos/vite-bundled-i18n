@@ -7,6 +7,12 @@
     "types": ["vite/client"],
     "skipLibCheck": true,
 
+    /* Resolve package name for module augmentation (i18n-types.d.ts) */
+    "paths": {
+      "vite-bundled-i18n": ["./src/index.ts"],
+      "vite-bundled-i18n/*": ["./src/*.ts"]
+    },
+
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

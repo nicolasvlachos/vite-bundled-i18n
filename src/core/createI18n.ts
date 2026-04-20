@@ -125,7 +125,11 @@ export function createI18n(config: I18nConfig): I18nInstance {
   const frozenConfig = Object.freeze({ ...config });
   const i18nBase = resolveI18nBase(config);
   const runtimeCache = resolveRuntimeCache(config);
-  const compiledManifestUrl = config.compiled?.manifestUrl ?? getInjectedCompiledManifestUrl();
+  // Derive manifest URL from publicBase when set — single source of truth for paths.
+  // Resolution: explicit manifestUrl > derived from publicBase > build-injected value
+  const compiledManifestUrl = config.compiled?.manifestUrl
+    ?? (config.publicBase ? `${i18nBase}/compiled/manifest.js` : undefined)
+    ?? getInjectedCompiledManifestUrl();
   const useCompiledRuntime = shouldUseCompiledRuntime(config, compiledManifestUrl);
   let compiledRuntimeActive = useCompiledRuntime;
 
@@ -489,11 +493,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
       }
       loadedScopes.add(scopeKey);
       evictUnused();
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('404')) {
-        loadedScopes.add(scopeKey);
-        return;
-      }
+    } catch {
       handleFetchError();
     }
   }

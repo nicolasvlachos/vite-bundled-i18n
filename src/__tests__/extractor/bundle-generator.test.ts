@@ -324,7 +324,7 @@ describe('generateBundles', () => {
     expect(dictData.ok).toBe('OK');
   });
 
-  it('skips writing scope bundle when dictionaries own all keys', () => {
+  it('emits empty scope bundle when dictionaries own all keys (prevents 404)', () => {
     writeLocale('en', 'feedback', {
       index: { title: 'Feedback', submit: 'Submit' },
     });
@@ -356,15 +356,18 @@ describe('generateBundles', () => {
       },
     });
 
-    // The scope bundle for 'feedback' should NOT be emitted
+    // Scope bundle is emitted (as {}) so fetch succeeds and ready becomes true
     const scopeBundle = bundles.find((b) => b.name === 'feedback');
-    expect(scopeBundle).toBeUndefined();
+    expect(scopeBundle).toBeDefined();
+    expect(scopeBundle!.keyCount).toBe(0);
 
-    // The file should not exist on disk
+    // File exists on disk with empty JSON
     const scopeFilePath = path.join(outDir(), 'en', 'feedback.json');
-    expect(fs.existsSync(scopeFilePath)).toBe(false);
+    expect(fs.existsSync(scopeFilePath)).toBe(true);
+    const content = JSON.parse(fs.readFileSync(scopeFilePath, 'utf-8'));
+    expect(content).toEqual({});
 
-    // The dictionary bundle SHOULD exist
+    // Dictionary bundle has the actual keys
     const dictBundle = bundles.find((b) => b.name === '_dict/feedbackDict');
     expect(dictBundle).toBeDefined();
   });

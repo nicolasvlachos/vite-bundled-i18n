@@ -35,7 +35,13 @@ export function i18nPlugin(
   sharedConfig: I18nSharedConfig,
   buildConfig?: I18nBuildPluginConfig,
 ): PluginOption[] {
-  const plugins: PluginOption[] = [i18nDevPlugin(sharedConfig)];
+  const plugins: PluginOption[] = [
+    i18nDevPlugin(sharedConfig, {
+      assetsDir: buildConfig?.assetsDir,
+      defaultLocale: buildConfig?.defaultLocale,
+      typesOutPath: buildConfig?.typesOutPath,
+    }),
+  ];
 
   if (buildConfig) {
     plugins.push(i18nBuildPlugin(sharedConfig, buildConfig));

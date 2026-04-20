@@ -176,10 +176,13 @@ export function i18nBuildPlugin(
   return {
     name: 'vite-bundled-i18n-build',
     apply: 'build',
+    // enforce: 'post' ensures config() runs AFTER other plugins (e.g. Laravel's
+    // Vite plugin) that set `base` in their own config() hooks.
+    enforce: 'post',
     config(config) {
       const base = config.base ?? '/';
-      const manifestUrl = joinPublicPath(base, `${assetsDir}/compiled/manifest.js`);
       const i18nBase = joinPublicPath(base, assetsDir).replace(/\/$/, '');
+      const manifestUrl = joinPublicPath(base, `${assetsDir}/compiled/manifest.js`);
       return {
         define: {
           __VITE_I18N_COMPILED_MANIFEST__: JSON.stringify(manifestUrl),

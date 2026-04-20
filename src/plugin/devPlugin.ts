@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { Plugin } from 'vite';
 import { flattenKeys, pruneNamespace } from '../extractor/bundle-generator';
 import { keyMatchesPattern, normalizeDictionaries } from '../extractor/dictionary-ownership';
+import { writeTypes } from '../extractor/type-generator';
 import type { I18nSharedConfig } from '../core/config';
 
 /**
@@ -54,8 +55,17 @@ export type I18nDevPluginConfig = I18nSharedConfig;
  * });
  * ```
  */
-export function i18nDevPlugin(config: I18nDevPluginConfig): Plugin {
+export interface I18nDevPluginOptions {
+  assetsDir?: string;
+  /** Default locale for type generation. Required for dev-time autocomplete. */
+  defaultLocale?: string;
+  /** Path to write generated types. Defaults to `src/i18n-types.d.ts`. */
+  typesOutPath?: string;
+}
+
+export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPluginOptions): Plugin {
   let projectRoot = '';
+  const assetsPrefix = `/${options?.assetsDir ?? '__i18n'}/`;
 
   /**
    * Reads a namespace JSON file from the locales directory.
@@ -144,24 +154,43 @@ export function i18nDevPlugin(config: I18nDevPluginConfig): Plugin {
       projectRoot = resolvedConfig.root;
     },
     configureServer(server) {
-      // Watch locale files for changes and trigger reload
       const localesPath = path.join(projectRoot, config.localesDir);
+      const defaultLocale = options?.defaultLocale ?? 'en';
+      const typesOutPath = options?.typesOutPath
+        ? path.resolve(projectRoot, options.typesOutPath)
+        : path.join(projectRoot, 'src', 'i18n-types.d.ts');
+
+      // Generate types on server start for dev-time autocomplete
+      function regenerateTypes() {
+        try {
+          writeTypes(localesPath, defaultLocale, typesOutPath);
+        } catch {
+          // Silently skip if locales dir doesn't exist yet
+        }
+      }
+
+      regenerateTypes();
+
+      // Watch locale files: regenerate types + reload page
       server.watcher.add(localesPath);
 
       server.watcher.on('change', (filePath) => {
         if (filePath.startsWith(localesPath) && filePath.endsWith('.json')) {
+          regenerateTypes();
           server.ws.send({ type: 'full-reload' });
         }
       });
 
       server.middlewares.use((req, res, next) => {
-        if (!req.url?.startsWith('/__i18n/')) {
+        if (!req.url?.startsWith(assetsPrefix)) {
           return next();
         }
 
-        // Named dictionary: /__i18n/{locale}/_dict/{name}.json
-        const dictMatch = req.url.match(
-          /^\/__i18n\/([^/]+)\/_dict\/([^/]+)\.json$/,
+        const relativePath = req.url.slice(assetsPrefix.length);
+
+        // Named dictionary: {locale}/_dict/{name}.json
+        const dictMatch = relativePath.match(
+          /^([^/]+)\/_dict\/([^/]+)\.json$/,
         );
         if (dictMatch) {
           const [, locale, dictName] = dictMatch;
@@ -173,9 +202,9 @@ export function i18nDevPlugin(config: I18nDevPluginConfig): Plugin {
           return;
         }
 
-        // Scope bundle: /__i18n/{locale}/{scope}.json
-        const scopeMatch = req.url.match(
-          /^\/__i18n\/([^/]+)\/(.+)\.json$/,
+        // Scope bundle: {locale}/{scope}.json
+        const scopeMatch = relativePath.match(
+          /^([^/]+)\/(.+)\.json$/,
         );
         if (scopeMatch) {
           const [, locale, scope] = scopeMatch;

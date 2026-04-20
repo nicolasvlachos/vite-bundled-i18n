@@ -246,6 +246,178 @@ declare module 'vite-bundled-i18n' {
     'shared.noResults': {};
     'shared.backToHome': {};
   }
+
+  interface I18nNestedKeys {
+    'account': {
+      'addresses': {
+        'addNew': true;
+        'default': true;
+        'heading': true;
+        'setDefault': true;
+      };
+      'orders': {
+        'empty': true;
+        'heading': true;
+        'orderNumber': true;
+        'placedOn': true;
+        'reorder': true;
+        'status': {
+          'cancelled': true;
+          'delivered': true;
+          'pending': true;
+          'processing': true;
+          'shipped': true;
+        };
+        'trackOrder': true;
+      };
+      'profile': {
+        'changePassword': true;
+        'confirmPassword': true;
+        'currentPassword': true;
+        'email': true;
+        'heading': true;
+        'name': true;
+        'newPassword': true;
+        'personalInfo': true;
+        'phone': true;
+        'updated': true;
+      };
+    };
+    'actions': {
+      'addToCart': true;
+      'applyFilter': true;
+      'checkout': true;
+      'clearFilters': true;
+      'create': true;
+      'delete': true;
+      'edit': true;
+      'register': true;
+      'removeFromCart': true;
+      'save': true;
+      'signIn': true;
+      'signOut': true;
+      'sortBy': true;
+      'submit': true;
+      'update': true;
+      'viewDetails': true;
+    };
+    'cart': {
+      'empty': true;
+      'emptyAction': true;
+      'item': {
+        'moveToWishlist': true;
+        'priceEach': true;
+        'quantity': true;
+        'remove': true;
+      };
+      'promoCode': {
+        'applied': true;
+        'apply': true;
+        'invalid': true;
+        'label': true;
+        'placeholder': true;
+      };
+      'summary': {
+        'estimatedDelivery': true;
+        'freeShipping': true;
+        'shipping': true;
+        'subtotal': true;
+        'tax': true;
+        'total': true;
+      };
+      'title': true;
+    };
+    'global': {
+      'appName': true;
+      'footer': {
+        'contact': true;
+        'madeWith': true;
+        'privacy': true;
+        'terms': true;
+        'version': true;
+      };
+      'meta': {
+        'description': true;
+        'title': true;
+      };
+      'nav': {
+        'about': true;
+        'account': true;
+        'cart': true;
+        'home': true;
+        'products': true;
+      };
+      'tagline': true;
+    };
+    'products': {
+      'index': {
+        'empty': true;
+        'filters': {
+          'category': true;
+          'featured': true;
+          'inStock': true;
+          'priceRange': true;
+        };
+        'heading': true;
+        'sort': {
+          'newest': true;
+          'popular': true;
+          'priceAsc': true;
+          'priceDesc': true;
+        };
+        'subheading': true;
+      };
+      'reviews': {
+        'averageRating': true;
+        'heading': true;
+        'helpful': true;
+        'noReviews': true;
+        'reported': true;
+        'reviewCount': true;
+        'writeReview': true;
+      };
+      'show': {
+        'availability': {
+          'backorder': true;
+          'inStock': true;
+          'outOfStock': true;
+        };
+        'description': true;
+        'discount': true;
+        'originalPrice': true;
+        'price': true;
+        'relatedProducts': true;
+        'sku': true;
+        'tabs': {
+          'description': true;
+          'reviews': true;
+          'specifications': true;
+        };
+        'title': true;
+      };
+    };
+    'shared': {
+      'backToHome': true;
+      'cancel': true;
+      'close': true;
+      'confirm': true;
+      'copyright': true;
+      'error': true;
+      'loading': true;
+      'next': true;
+      'no': true;
+      'noResults': true;
+      'ok': true;
+      'previous': true;
+      'retry': true;
+      'search': true;
+      'yes': true;
+    };
+  }
+
+  interface I18nScopeMap {
+    // No scopes found
+  }
 }
 
 /** Union of all valid translation key paths. */
@@ -382,3 +554,9 @@ export type NamespaceKeyPaths<T extends Namespace> =
   T extends 'products' ? 'index.heading' | 'index.subheading' | 'index.empty' | 'index.filters.category' | 'index.filters.priceRange' | 'index.filters.inStock' | 'index.filters.featured' | 'index.sort.newest' | 'index.sort.priceAsc' | 'index.sort.priceDesc' | 'index.sort.popular' | 'show.title' | 'show.description' | 'show.price' | 'show.originalPrice' | 'show.discount' | 'show.sku' | 'show.availability.inStock' | 'show.availability.outOfStock' | 'show.availability.backorder' | 'show.tabs.description' | 'show.tabs.specifications' | 'show.tabs.reviews' | 'show.relatedProducts' | 'reviews.heading' | 'reviews.writeReview' | 'reviews.averageRating' | 'reviews.reviewCount' | 'reviews.noReviews' | 'reviews.helpful' | 'reviews.reported' :
   T extends 'shared' ? 'ok' | 'cancel' | 'next' | 'previous' | 'copyright' | 'loading' | 'error' | 'retry' | 'close' | 'confirm' | 'yes' | 'no' | 'search' | 'noResults' | 'backToHome' :
   never;
+
+/** Recursive dot-path expansion for nested key interfaces. */
+type DotPrefix<K extends string> = K extends '' ? '' : `.${K}`;
+type PathsOf<T> = T extends true
+  ? ''
+  : { [K in keyof T & string]: `${K}${DotPrefix<PathsOf<T[K]>>}` }[keyof T & string];
