@@ -93,14 +93,22 @@ describe('findTranslationCalls', () => {
     expect(calls).toHaveLength(2);
   });
 
-  it('ignores t identifiers not from our package', () => {
+  it('extracts t() calls from non-package sources in global mode (dotted keys)', () => {
     const sf = parse("import { t } from 'other-library';\nt('some.key');");
     const calls = findTranslationCalls(sf, globalOpts);
-    expect(calls).toHaveLength(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].key).toBe('some.key');
   });
 
-  it('ignores t variables not from useI18n', () => {
+  it('extracts t() calls from local variables in global mode (dotted keys)', () => {
     const sf = parse("const t = (x: string) => x;\nt('some.key');");
+    const calls = findTranslationCalls(sf, globalOpts);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].key).toBe('some.key');
+  });
+
+  it('ignores t() calls without dotted keys (no false positives)', () => {
+    const sf = parse("const t = (x: string) => x;\nt('nodots');");
     const calls = findTranslationCalls(sf, globalOpts);
     expect(calls).toHaveLength(0);
   });

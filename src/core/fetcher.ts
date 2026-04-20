@@ -41,6 +41,13 @@ export async function fetchBundle(
   requestInit?: RequestInit,
 ): Promise<Record<string, NestedTranslations>> {
   const url = buildBundlePath(base, locale, bundleName);
+  return fetchBundleFromUrl(url, requestInit);
+}
+
+export async function fetchBundleFromUrl(
+  url: string,
+  requestInit?: RequestInit,
+): Promise<Record<string, NestedTranslations>> {
   const response = requestInit
     ? await fetch(url, requestInit)
     : await fetch(url);
@@ -52,4 +59,21 @@ export async function fetchBundle(
   }
 
   return response.json() as Promise<Record<string, NestedTranslations>>;
+}
+
+export async function fetchNamespaceFromUrl(
+  url: string,
+  requestInit?: RequestInit,
+): Promise<NestedTranslations> {
+  const response = requestInit
+    ? await fetch(url, requestInit)
+    : await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to load translations: ${url} (${response.status} ${response.statusText})`,
+    );
+  }
+
+  return response.json() as Promise<NestedTranslations>;
 }

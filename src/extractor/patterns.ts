@@ -4,6 +4,9 @@ import type { ExtractionOptions, ExtractedKey } from './types';
 
 const DEFAULT_KEY_FIELDS = ['labelKey', 'titleKey', 'translationKey'];
 
+/** Function names recognized as translation calls even when not traced to useI18n(). */
+const TRANSLATION_CALLEE_NAMES = new Set(['t', 'get']);
+
 function getKeyFields(options: ExtractionOptions): Set<string> {
   if (!options.keyFields || options.keyFields.length === 0) {
     return new Set(DEFAULT_KEY_FIELDS);
@@ -337,6 +340,32 @@ export function findTranslationCalls(
           key: prefix ? `${prefix}.*` : '*',
           dynamic: true,
           staticPrefix: prefix || undefined,
+          line: line + 1,
+          column: character,
+        });
+      }
+    }
+
+    // Catch t() / get() calls from untracked sources (e.g., t passed as argument to helpers).
+    // Only fires in global extraction mode — scoped mode only tracks traced identifiers.
+    if (
+      options.scope !== 'scoped' &&
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      !trackedNames.has(node.expression.text) &&
+      !i18nKeyNames.has(node.expression.text) &&
+      TRANSLATION_CALLEE_NAMES.has(node.expression.text) &&
+      node.arguments.length > 0
+    ) {
+      const keyArg = node.arguments[0];
+      const staticKey = getStringValue(keyArg)
+        ?? (ts.isIdentifier(keyArg) ? literalConstants.get(keyArg.text) : undefined);
+      // Only extract if it looks like a dotted translation key (has at least one dot)
+      if (staticKey !== undefined && staticKey.includes('.')) {
+        const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
+        results.push({
+          key: staticKey,
+          dynamic: false,
           line: line + 1,
           column: character,
         });

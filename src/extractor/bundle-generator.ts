@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ProjectAnalysis } from './walker-types';
 import type { DictionaryConfig } from '../core/types';
-import { resolveDictionaryOwnership } from './dictionary-ownership';
+import { resolveDictionaryOwnership, keyMatchesPattern } from './dictionary-ownership';
 import { buildScopePlans } from './scope-bundles';
 
 /**
@@ -179,37 +179,56 @@ export function generateBundles(
 
   if (hasNamedDictionaries) {
     for (const rule of ownership.rules) {
-      const ownedKeys = ownership.dictionaryKeys.get(rule.name) ?? new Set<string>();
-      const keysByNamespace = new Map<string, string[]>();
+      // Dictionary bundles include ALL keys from matching namespaces — no tree-shaking.
+      // Dictionaries are the "preload everything I need" layer.
+      // Only scope bundles are pruned to extracted keys.
+      const matchedNamespaces = new Set<string>();
 
-      for (const key of ownedKeys) {
-        const dotIndex = key.indexOf('.');
-        if (dotIndex === -1) continue;
-        const ns = key.slice(0, dotIndex);
-        const subKey = key.slice(dotIndex + 1);
-        if (!keysByNamespace.has(ns)) {
-          keysByNamespace.set(ns, []);
+      // Find all namespaces that match this dictionary's include patterns (minus exclude)
+      const localeDir = path.join(localesDir, locales[0]);
+      let nsFiles: string[] = [];
+      try {
+        nsFiles = fs.readdirSync(localeDir).filter(f => f.endsWith('.json'));
+      } catch { /* dir may not exist */ }
+
+      for (const file of nsFiles) {
+        const ns = file.slice(0, -'.json'.length);
+        // Check if any key in this namespace would match the include patterns
+        if (rule.include.some(pattern => keyMatchesPattern(`${ns}.x`, pattern) || keyMatchesPattern(`${ns}.`, pattern) || pattern === `${ns}.*` || pattern.startsWith(`${ns}.`) || (pattern.endsWith('*') && ns.startsWith(pattern.slice(0, -1))))) {
+          matchedNamespaces.add(ns);
         }
-        keysByNamespace.get(ns)!.push(subKey);
+      }
+
+      // Also check from the ownership map (covers exact key patterns)
+      const ownedKeys = ownership.dictionaryKeys.get(rule.name) ?? new Set<string>();
+      for (const key of ownedKeys) {
+        const ns = key.split('.')[0];
+        if (ns) matchedNamespaces.add(ns);
       }
 
       for (const locale of locales) {
         const bundleData: Record<string, unknown> = {};
         let totalKeyCount = 0;
-        let totalPrunedCount = 0;
 
-        for (const [ns, subKeys] of keysByNamespace) {
+        for (const ns of matchedNamespaces) {
           const fullData = readNamespaceFile(localesDir, locale, ns);
           if (!fullData) continue;
 
-          const uniqueSubKeys = [...new Set(subKeys)];
-          const pruned = pruneNamespace(fullData, uniqueSubKeys);
-          bundleData[ns] = pruned;
+          // Include ALL keys from the namespace that match include and don't match exclude
+          const allKeys = flattenKeys(fullData);
+          const includedKeys = allKeys.filter(subKey => {
+            const fullKey = `${ns}.${subKey}`;
+            const included = rule.include.some(pattern => keyMatchesPattern(fullKey, pattern));
+            const excluded = rule.exclude.length > 0 &&
+              rule.exclude.some(pattern => keyMatchesPattern(fullKey, pattern));
+            return included && !excluded;
+          });
 
-          const availableCount = flattenKeys(fullData).length;
-          const keptCount = flattenKeys(pruned).length;
-          totalKeyCount += keptCount;
-          totalPrunedCount += availableCount - keptCount;
+          if (includedKeys.length === 0) continue;
+
+          const pruned = pruneNamespace(fullData, includedKeys);
+          bundleData[ns] = pruned;
+          totalKeyCount += flattenKeys(pruned).length;
         }
 
         const filePath = path.join(outDir, locale, '_dict', `${rule.name}.json`);
@@ -221,7 +240,7 @@ export function generateBundles(
           locale,
           filePath,
           keyCount: totalKeyCount,
-          prunedCount: totalPrunedCount,
+          prunedCount: 0,
         });
       }
     }

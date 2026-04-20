@@ -356,6 +356,17 @@ export interface I18nConfig {
    * differs from the Vite build `base`.
    */
   publicBase?: string;
+  /**
+   * Custom URL resolver for all translation fetches. When provided, this
+   * function controls WHERE translations are fetched from. Use alongside
+   * `requestInit` which controls HOW the fetch is made (headers, credentials).
+   *
+   * @param locale - The locale being fetched
+   * @param type - The bundle type: 'dictionary' | 'scope' | 'namespace' | 'manifest'
+   * @param name - The resource name (dict name, scope id, namespace, or 'manifest')
+   * @returns The URL to fetch from
+   */
+  resolveUrl?: (locale: string, type: 'dictionary' | 'scope' | 'namespace' | 'manifest', name: string) => string;
 }
 
 /**

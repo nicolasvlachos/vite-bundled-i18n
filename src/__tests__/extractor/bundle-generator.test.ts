@@ -372,10 +372,9 @@ describe('generateBundles', () => {
     expect(dictBundle).toBeDefined();
   });
 
-  it('dictionary bundles contain only actually-used keys, not all keys from the namespace (dead-key elimination)', () => {
-    // The feedback namespace has 5 keys in the locale file, but only 2 are
-    // actually referenced in source code. The dictionary claims 'feedback.*'
-    // which matches all of them, but only the 2 used keys should appear.
+  it('dictionary bundles include ALL namespace keys matching patterns (no tree-shaking)', () => {
+    // Dictionaries are the "preload everything" layer — no extraction-based pruning.
+    // include: ['feedback.*'] means ALL keys from feedback.json go into the bundle.
     writeLocale('en', 'feedback', {
       validation: {
         required: 'Required',
@@ -422,32 +421,26 @@ describe('generateBundles', () => {
       fs.readFileSync(dictBundle!.filePath, 'utf-8'),
     );
 
-    // Only the 2 used keys should be present
+    // ALL keys from the namespace are included — not just extracted ones
     expect(written).toEqual({
       feedback: {
         validation: {
           required: 'Required',
+          minLength: 'Too short',
+          maxLength: 'Too long',
+          pattern: 'Invalid format',
           email: 'Invalid email',
         },
+        success: 'Success!',
+        error: 'Error!',
       },
     });
 
-    // Dead keys must NOT be present
-    expect(written.feedback.validation.minLength).toBeUndefined();
-    expect(written.feedback.validation.maxLength).toBeUndefined();
-    expect(written.feedback.validation.pattern).toBeUndefined();
-    expect(written.feedback.success).toBeUndefined();
-    expect(written.feedback.error).toBeUndefined();
-
-    // Verify counts: 7 total keys in file, 2 kept, 5 pruned
-    expect(dictBundle!.keyCount).toBe(2);
-    expect(dictBundle!.prunedCount).toBe(5);
+    expect(dictBundle!.keyCount).toBe(7);
   });
 
-  it('dictionary dead-key elimination works across multiple routes', () => {
-    // Two routes reference different keys from the same dictionary namespace.
-    // The dictionary bundle should contain the union of used keys, but still
-    // exclude keys that no route references at all.
+  it('dictionary exclude patterns still filter keys from the full namespace', () => {
+    // exclude carves out sub-paths from the full namespace dump
     writeLocale('en', 'ui', {
       button: { save: 'Save', cancel: 'Cancel', delete: 'Delete', reset: 'Reset' },
       label: { name: 'Name', email: 'Email', phone: 'Phone' },
@@ -459,22 +452,8 @@ describe('generateBundles', () => {
           entryPoint: '/app/pages/form.tsx',
           routeId: 'form',
           scopes: ['ui'],
-          keys: [
-            makeKey('ui.button.save'),
-            makeKey('ui.button.cancel'),
-            makeKey('ui.label.name'),
-          ],
+          keys: [makeKey('ui.button.save')],
           files: ['/app/pages/form.tsx'],
-        },
-        {
-          entryPoint: '/app/pages/profile.tsx',
-          routeId: 'profile',
-          scopes: ['ui'],
-          keys: [
-            makeKey('ui.button.save'),
-            makeKey('ui.label.email'),
-          ],
-          files: ['/app/pages/profile.tsx'],
         },
       ],
       availableNamespaces: ['ui'],
@@ -487,6 +466,7 @@ describe('generateBundles', () => {
       dictionaries: {
         uiDict: {
           include: ['ui.*'],
+          exclude: ['ui.label.*'],
         },
       },
     });
@@ -498,21 +478,11 @@ describe('generateBundles', () => {
       fs.readFileSync(dictBundle!.filePath, 'utf-8'),
     );
 
-    // Union of used keys from both routes
+    // All button keys included, all label keys excluded
     expect(written).toEqual({
       ui: {
-        button: { save: 'Save', cancel: 'Cancel' },
-        label: { name: 'Name', email: 'Email' },
+        button: { save: 'Save', cancel: 'Cancel', delete: 'Delete', reset: 'Reset' },
       },
     });
-
-    // Dead keys: button.delete, button.reset, label.phone
-    expect(written.ui.button.delete).toBeUndefined();
-    expect(written.ui.button.reset).toBeUndefined();
-    expect(written.ui.label.phone).toBeUndefined();
-
-    // 4 kept out of 7 total
-    expect(dictBundle!.keyCount).toBe(4);
-    expect(dictBundle!.prunedCount).toBe(3);
   });
 });

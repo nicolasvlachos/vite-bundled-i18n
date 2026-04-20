@@ -2,7 +2,7 @@ import type { I18nConfig, I18nInstance, NestedTranslations, KeyUsageEntry } from
 import { createStore } from './store';
 import { resolveKey, inferNamespace, extractSubkey } from './resolver';
 import { interpolate } from './interpolator';
-import { fetchBundle, fetchNamespace } from './fetcher';
+import { buildBundlePath, buildLoadPath, fetchBundleFromUrl, fetchNamespaceFromUrl } from './fetcher';
 import {
   compiledHasKeyInMap,
   compiledTranslateFromMap,
@@ -125,11 +125,16 @@ export function createI18n(config: I18nConfig): I18nInstance {
   const frozenConfig = Object.freeze({ ...config });
   const i18nBase = resolveI18nBase(config);
   const runtimeCache = resolveRuntimeCache(config);
-  // Derive manifest URL from publicBase when set — single source of truth for paths.
-  // Resolution: explicit manifestUrl > derived from publicBase > build-injected value
-  const compiledManifestUrl = config.compiled?.manifestUrl
-    ?? (config.publicBase ? `${i18nBase}/compiled/manifest.js` : undefined)
-    ?? getInjectedCompiledManifestUrl();
+  // Derive manifest URL. Resolution order:
+  // 1. resolveUrl callback (if provided)
+  // 2. explicit compiled.manifestUrl
+  // 3. derived from publicBase
+  // 4. build-injected __VITE_I18N_COMPILED_MANIFEST__
+  const compiledManifestUrl = config.resolveUrl
+    ? config.resolveUrl(config.locale, 'manifest', 'manifest')
+    : (config.compiled?.manifestUrl
+      ?? (config.publicBase ? `${i18nBase}/compiled/manifest.js` : undefined)
+      ?? getInjectedCompiledManifestUrl());
   const useCompiledRuntime = shouldUseCompiledRuntime(config, compiledManifestUrl);
   let compiledRuntimeActive = useCompiledRuntime;
 
@@ -437,7 +442,10 @@ export function createI18n(config: I18nConfig): I18nInstance {
       }
 
       const reqInit = await resolveRequestInit(config.requestInit);
-      const bundle = await fetchBundle(i18nBase, locale, `_dict/${name}`, reqInit);
+      const url = config.resolveUrl
+        ? config.resolveUrl(locale, 'dictionary', name)
+        : buildBundlePath(i18nBase, locale, `_dict/${name}`);
+      const bundle = await fetchBundleFromUrl(url, reqInit);
       for (const [namespace, data] of Object.entries(bundle)) {
         store.addResources(locale, namespace, data, {
           source: 'dictionary',
@@ -484,7 +492,10 @@ export function createI18n(config: I18nConfig): I18nInstance {
       }
 
       const reqInit = await resolveRequestInit(config.requestInit);
-      const bundle = await fetchBundle(i18nBase, locale, scope, reqInit);
+      const url = config.resolveUrl
+        ? config.resolveUrl(locale, 'scope', scope)
+        : buildBundlePath(i18nBase, locale, scope);
+      const bundle = await fetchBundleFromUrl(url, reqInit);
       for (const [namespace, data] of Object.entries(bundle)) {
         store.addResources(locale, namespace, data, {
           source: 'scope',
@@ -509,12 +520,10 @@ export function createI18n(config: I18nConfig): I18nInstance {
       if (!store.hasNamespace(locale, ns)) {
         try {
           const reqInit = await resolveRequestInit(config.requestInit);
-          const data = await fetchNamespace(
-            config.localesDir,
-            locale,
-            ns,
-            reqInit,
-          );
+          const nsUrl = config.resolveUrl
+            ? config.resolveUrl(locale, 'namespace', ns)
+            : buildLoadPath(config.localesDir, locale, ns);
+          const data = await fetchNamespaceFromUrl(nsUrl, reqInit);
           store.addResources(locale, ns, data, {
             source: 'manual',
             pinned: false,
