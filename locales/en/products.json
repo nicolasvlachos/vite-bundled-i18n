@@ -1,0 +1,47 @@
+{
+  "index": {
+    "heading": "All Products",
+    "subheading": "Browse our collection of {{count}} items",
+    "empty": "No products found",
+    "filters": {
+      "category": "Category",
+      "priceRange": "Price range",
+      "inStock": "In stock only",
+      "featured": "Featured"
+    },
+    "sort": {
+      "newest": "Newest first",
+      "priceAsc": "Price: low to high",
+      "priceDesc": "Price: high to low",
+      "popular": "Most popular"
+    }
+  },
+  "show": {
+    "title": "Product Details",
+    "description": "Browse our catalog",
+    "price": "Price: {{amount}}",
+    "originalPrice": "Was: {{amount}}",
+    "discount": "Save {{percent}}%",
+    "sku": "SKU: {{code}}",
+    "availability": {
+      "inStock": "In stock — {{count}} remaining",
+      "outOfStock": "Out of stock",
+      "backorder": "Available on backorder"
+    },
+    "tabs": {
+      "description": "Description",
+      "specifications": "Specifications",
+      "reviews": "Reviews ({{count}})"
+    },
+    "relatedProducts": "You might also like"
+  },
+  "reviews": {
+    "heading": "Customer Reviews",
+    "writeReview": "Write a review",
+    "averageRating": "{{rating}} out of 5 stars",
+    "reviewCount": "Based on {{count}} reviews",
+    "noReviews": "No reviews yet. Be the first!",
+    "helpful": "Was this review helpful?",
+    "reported": "Review reported"
+  }
+}

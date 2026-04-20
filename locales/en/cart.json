@@ -1,0 +1,26 @@
+{
+  "title": "Your Cart",
+  "empty": "Your cart is empty",
+  "emptyAction": "Start shopping",
+  "summary": {
+    "subtotal": "Subtotal",
+    "shipping": "Shipping",
+    "tax": "Tax",
+    "total": "Total",
+    "freeShipping": "Free shipping",
+    "estimatedDelivery": "Estimated delivery: {{date}}"
+  },
+  "item": {
+    "quantity": "Qty: {{count}}",
+    "remove": "Remove",
+    "moveToWishlist": "Move to wishlist",
+    "priceEach": "{{amount}} each"
+  },
+  "promoCode": {
+    "label": "Promo code",
+    "placeholder": "Enter code",
+    "apply": "Apply",
+    "applied": "Code {{code}} applied — {{discount}} off",
+    "invalid": "Invalid promo code"
+  }
+}

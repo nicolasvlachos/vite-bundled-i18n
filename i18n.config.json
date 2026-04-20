@@ -1,0 +1,9 @@
+{
+  "pages": ["src/pages/**/*.tsx"],
+  "localesDir": "locales",
+  "locales": ["en", "bg"],
+  "defaultLocale": "en",
+  "outDir": ".i18n",
+  "typesOutPath": "src/i18n-types.d.ts",
+  "extractionScope": "global"
+}

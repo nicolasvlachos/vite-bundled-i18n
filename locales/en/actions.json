@@ -1,0 +1,18 @@
+{
+  "save": "Save",
+  "delete": "Delete",
+  "edit": "Edit",
+  "create": "Create",
+  "update": "Update",
+  "submit": "Submit",
+  "addToCart": "Add to cart",
+  "removeFromCart": "Remove from cart",
+  "checkout": "Checkout",
+  "signIn": "Sign in",
+  "signOut": "Sign out",
+  "register": "Create account",
+  "viewDetails": "View details",
+  "applyFilter": "Apply filter",
+  "clearFilters": "Clear all filters",
+  "sortBy": "Sort by {{field}}"
+}

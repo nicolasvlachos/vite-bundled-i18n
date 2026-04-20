@@ -1,0 +1,434 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createI18n } from '../../core/createI18n';
+import type { I18nConfig } from '../../core/types';
+
+const baseConfig: I18nConfig = {
+  locale: 'en',
+  defaultLocale: 'en',
+  supportedLocales: ['en', 'bg'],
+  localesDir: '/locales',
+};
+
+describe('createI18n', () => {
+  const originalFetch = globalThis.fetch;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'i18n-runtime-compiled-'));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns an I18nInstance with frozen config', () => {
+    const instance = createI18n(baseConfig);
+    expect(instance.config.locale).toBe('en');
+    expect(Object.isFrozen(instance.config)).toBe(true);
+  });
+
+  it('returns the current locale via getLocale', () => {
+    const instance = createI18n(baseConfig);
+    expect(instance.getLocale()).toBe('en');
+  });
+
+  it('translates a key after resources are added directly', () => {
+    const instance = createI18n(baseConfig);
+    instance.addResources('en', 'shared', { ok: 'OK', cancel: 'Cancel' });
+    expect(instance.translate('en', 'shared.ok')).toBe('OK');
+  });
+
+  it('resolves nested keys', () => {
+    const instance = createI18n(baseConfig);
+    instance.addResources('en', 'products', {
+      show: { title: 'Product Details' },
+    });
+    expect(instance.translate('en', 'products.show.title')).toBe('Product Details');
+  });
+
+  it('interpolates params in translated strings', () => {
+    const instance = createI18n(baseConfig);
+    instance.addResources('en', 'products', {
+      show: { price: 'Price: {{amount}}' },
+    });
+    expect(
+      instance.translate('en', 'products.show.price', { amount: 29.99 }),
+    ).toBe('Price: 29.99');
+  });
+
+  it('falls back to defaultLocale when key is missing in active locale', () => {
+    const instance = createI18n(baseConfig);
+    instance.addResources('en', 'shared', { ok: 'OK' });
+    expect(instance.translate('bg', 'shared.ok')).toBe('OK');
+  });
+
+  it('returns fallback string when key is missing in all locales', () => {
+    const instance = createI18n(baseConfig);
+    expect(
+      instance.translate('en', 'missing.key', undefined, 'Fallback'),
+    ).toBe('Fallback');
+  });
+
+  it('returns the key when no fallback and key is missing', () => {
+    const instance = createI18n(baseConfig);
+    expect(instance.translate('en', 'missing.key')).toBe('missing.key');
+  });
+
+  it('interpolates params into fallback string', () => {
+    const instance = createI18n(baseConfig);
+    expect(
+      instance.translate('en', 'missing.key', { n: 5 }, 'Found {{n}} items'),
+    ).toBe('Found 5 items');
+  });
+
+  it('checks key existence via hasKey', () => {
+    const instance = createI18n(baseConfig);
+    instance.addResources('en', 'shared', { ok: 'OK' });
+    expect(instance.hasKey('en', 'shared.ok')).toBe(true);
+    expect(instance.hasKey('en', 'shared.missing')).toBe(false);
+  });
+
+  it('tryTranslate returns undefined for unresolved keys', () => {
+    const instance = createI18n(baseConfig);
+    instance.addResources('en', 'shared', { ok: 'OK' });
+    expect(instance.tryTranslate('en', 'shared.ok')).toBe('OK');
+    expect(instance.tryTranslate('en', 'shared.missing')).toBeUndefined();
+  });
+
+  it('tryTranslate falls back to defaultLocale but not to key-as-value', () => {
+    const instance = createI18n(baseConfig);
+    instance.addResources('en', 'shared', { ok: 'OK' });
+    expect(instance.tryTranslate('bg', 'shared.ok')).toBe('OK');
+    expect(instance.tryTranslate('bg', 'shared.cancel')).toBeUndefined();
+  });
+
+  it('collects dictionary namespaces with deduplication', () => {
+    const instance = createI18n({
+      ...baseConfig,
+      dictionaries: {
+        global: { keys: ['shared', 'global'] },
+        ui: { keys: ['shared', 'actions'] },
+      },
+    });
+    expect(instance.getDictionaryNamespaces()).toEqual(['shared', 'global', 'actions']);
+  });
+
+  it('returns empty array when no dictionaries configured', () => {
+    const instance = createI18n(baseConfig);
+    expect(instance.getDictionaryNamespaces()).toEqual([]);
+  });
+
+  it('changes locale via changeLocale', async () => {
+    const instance = createI18n(baseConfig);
+    await instance.changeLocale('bg');
+    expect(instance.getLocale()).toBe('bg');
+  });
+
+  it('notifies subscribers on locale change', async () => {
+    const instance = createI18n(baseConfig);
+    const callback = vi.fn();
+    instance.onLocaleChange(callback);
+    await instance.changeLocale('bg');
+    expect(callback).toHaveBeenCalledWith('bg');
+  });
+
+  it('unsubscribes from locale changes', async () => {
+    const instance = createI18n(baseConfig);
+    const callback = vi.fn();
+    const unsub = instance.onLocaleChange(callback);
+    unsub();
+    await instance.changeLocale('bg');
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it('loads named dictionaries and scopes when changing locale', async () => {
+    const instance = createI18n({
+      ...baseConfig,
+      dictionaries: {
+        global: { keys: ['shared'] },
+      },
+    });
+    // Add English resources
+    instance.addResources('en', 'shared', { ok: 'OK' });
+
+    // Simulate a page that loaded a scope
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ products: { show: { title: 'Details' } } }),
+    } as Response);
+    await instance.loadScope('en', 'products.show');
+
+    // Mock fetch for changeLocale — named dictionary + scope
+    vi.mocked(globalThis.fetch).mockImplementation((url) => {
+      const urlStr = String(url);
+      // Named dictionary bundle: /__i18n/bg/_dict/global.json
+      if (urlStr.includes('bg/_dict/global')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ shared: { ok: 'Добре' } }),
+        } as Response);
+      }
+      // Scope bundle: /__i18n/bg/products.show.json
+      if (urlStr.includes('bg/products.show')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ products: { show: { title: 'Детайли' } } }),
+        } as Response);
+      }
+      return Promise.reject(new Error('Unexpected URL: ' + urlStr));
+    });
+
+    await instance.changeLocale('bg');
+
+    expect(instance.translate('bg', 'shared.ok')).toBe('Добре');
+    expect(instance.translate('bg', 'products.show.title')).toBe('Детайли');
+  });
+
+  it('reports namespace and scope load state', async () => {
+    const instance = createI18n(baseConfig);
+    expect(instance.isNamespaceLoaded('en', 'shared')).toBe(false);
+    expect(instance.isScopeLoaded('en', 'products.show')).toBe(false);
+
+    instance.addResources('en', 'shared', { ok: 'OK' });
+    expect(instance.isNamespaceLoaded('en', 'shared')).toBe(true);
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ products: { show: { title: 'Details' } } }),
+    } as Response);
+    await instance.loadScope('en', 'products.show');
+
+    expect(instance.isScopeLoaded('en', 'products.show')).toBe(true);
+    expect(instance.isNamespaceLoaded('en', 'products')).toBe(true);
+  });
+
+  it('tracks key usage for dev diagnostics', () => {
+    const instance = createI18n(baseConfig);
+    instance.addResources('en', 'shared', { ok: 'OK' });
+
+    instance.translate('en', 'shared.ok');
+    instance.translate('en', 'shared.missing', undefined, 'Fallback');
+    instance.translate('en', 'nonexistent.key');
+
+    const usage = instance.getKeyUsage();
+    expect(usage).toHaveLength(3);
+    expect(usage[0]).toMatchObject({ key: 'shared.ok', resolvedFrom: 'primary' });
+    expect(usage[1]).toMatchObject({ key: 'shared.missing', resolvedFrom: 'fallback-string' });
+    expect(usage[2]).toMatchObject({ key: 'nonexistent.key', resolvedFrom: 'key-as-value' });
+  });
+
+  it('returns dictionary names in declaration order', () => {
+    const instance = createI18n({
+      ...baseConfig,
+      dictionaries: {
+        global: { keys: ['shared', 'global'] },
+        admin: { keys: ['admin'] },
+      },
+    });
+    expect(instance.getDictionaryNames()).toEqual(['global', 'admin']);
+  });
+
+  it('loads namespaces via fetch', async () => {
+    const mockData = { ok: 'OK' };
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockData),
+    } as Response);
+
+    const instance = createI18n(baseConfig);
+    await instance.loadNamespaces('en', ['shared']);
+
+    expect(instance.translate('en', 'shared.ok')).toBe('OK');
+    expect(globalThis.fetch).toHaveBeenCalledWith('/locales/en/shared.json');
+  });
+
+  it('loads compiled dictionaries and scopes without fetch when a compiled manifest is configured', async () => {
+    const instance = createI18n({
+      ...baseConfig,
+      dictionaries: {
+        global: { keys: ['shared'] },
+      },
+      compiled: {
+        enabled: true,
+        loadManifest: async () => ({
+          scopes: {
+            'products.show': {
+              en: async () => ({ default: new Map([['products.show.title', 'Details']]) }),
+              bg: async () => ({ default: new Map([['products.show.title', 'Детайли']]) }),
+            },
+          },
+          dictionaries: {
+            global: {
+              en: async () => ({ default: new Map([
+                ['shared.ok', 'OK'],
+                ['shared.loading', 'Loading...'],
+              ]) }),
+              bg: async () => ({ default: new Map([
+                ['shared.ok', 'Добре'],
+                ['shared.loading', 'Loading...'],
+              ]) }),
+            },
+          },
+        }),
+      },
+    });
+
+    await instance.loadAllDictionaries('en');
+    await instance.loadScope('en', 'products.show');
+
+    expect(instance.translate('en', 'shared.ok')).toBe('OK');
+    expect(instance.translate('en', 'products.show.title')).toBe('Details');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+
+    await instance.changeLocale('bg');
+
+    expect(instance.translate('bg', 'shared.ok')).toBe('Добре');
+    expect(instance.translate('bg', 'products.show.title')).toBe('Детайли');
+    expect(instance.translate('bg', 'shared.loading')).toBe('Loading...');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('passes requestInit to namespace loading', async () => {
+    const mockData = { ok: 'OK' };
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockData),
+    } as Response);
+
+    const instance = createI18n({
+      ...baseConfig,
+      requestInit: { cache: 'force-cache' },
+    });
+    await instance.loadNamespaces('en', ['shared']);
+
+    expect(globalThis.fetch).toHaveBeenCalledWith('/locales/en/shared.json', {
+      cache: 'force-cache',
+    });
+  });
+
+  it('skips loading namespaces already in the store', async () => {
+    const instance = createI18n(baseConfig);
+    instance.addResources('en', 'shared', { ok: 'OK' });
+
+    await instance.loadNamespaces('en', ['shared']);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('throws for empty supportedLocales', () => {
+    expect(() => createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: [],
+      localesDir: '/locales',
+    })).toThrow('supportedLocales');
+  });
+
+  it('throws when defaultLocale is not in supportedLocales', () => {
+    expect(() => createI18n({
+      locale: 'en',
+      defaultLocale: 'fr',
+      supportedLocales: ['en', 'bg'],
+      localesDir: '/locales',
+    })).toThrow('defaultLocale');
+  });
+
+  it('logs a warning and continues when a namespace fails to load', async () => {
+    vi.mocked(globalThis.fetch).mockRejectedValue(new Error('Network error'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const instance = createI18n(baseConfig);
+    await instance.loadNamespaces('en', ['shared']);
+
+    expect(warnSpy).toHaveBeenCalled();
+    expect(instance.hasKey('en', 'shared.ok')).toBe(false);
+    warnSpy.mockRestore();
+  });
+
+  it('returns cache stats and can unload namespaces/locales', async () => {
+    const instance = createI18n({
+      ...baseConfig,
+      dictionaries: {
+        global: { keys: ['shared'] },
+      },
+    });
+
+    instance.addResources('en', 'products', { show: { title: 'Details' } });
+    expect(instance.getCacheStats().totalNamespaces).toBe(1);
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ shared: { ok: 'OK' } }),
+    } as Response);
+    await instance.loadDictionary('en', 'global');
+
+    const stats = instance.getCacheStats();
+    expect(stats.totalNamespaces).toBe(2);
+    expect(stats.loadedDictionaries).toBe(1);
+    expect(stats.pinnedNamespaces).toBe(1);
+
+    instance.unloadNamespace('en', 'products');
+    expect(instance.isNamespaceLoaded('en', 'products')).toBe(false);
+
+    instance.unloadLocale('en');
+    expect(instance.isNamespaceLoaded('en', 'shared')).toBe(false);
+    expect(instance.getCacheStats().totalLocales).toBe(0);
+  });
+
+  it('evicts least recently used non-pinned namespaces when maxNamespaces is exceeded', () => {
+    const instance = createI18n({
+      ...baseConfig,
+      cache: {
+        runtime: {
+          strategy: 'memory',
+          eviction: 'lru',
+          maxNamespaces: 1,
+          pinDictionaries: true,
+        },
+      },
+      dictionaries: {
+        global: { keys: ['shared'] },
+      },
+    });
+
+    instance.addResources('en', 'shared', { ok: 'OK' });
+    instance.addResources('en', 'products', { show: { title: 'Details' } });
+    instance.addResources('en', 'cart', { title: 'Cart' });
+
+    expect(instance.isNamespaceLoaded('en', 'shared')).toBe(false);
+    expect(instance.isNamespaceLoaded('en', 'products')).toBe(false);
+    expect(instance.isNamespaceLoaded('en', 'cart')).toBe(true);
+  });
+
+  it('does not evict pinned dictionary namespaces under namespace pressure', async () => {
+    const instance = createI18n({
+      ...baseConfig,
+      cache: {
+        runtime: {
+          strategy: 'memory',
+          eviction: 'lru',
+          maxNamespaces: 1,
+          pinDictionaries: true,
+        },
+      },
+      dictionaries: {
+        global: { keys: ['shared'] },
+      },
+    });
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ shared: { ok: 'OK' } }),
+    } as Response);
+    await instance.loadDictionary('en', 'global');
+
+    instance.addResources('en', 'products', { show: { title: 'Details' } });
+
+    expect(instance.isNamespaceLoaded('en', 'shared')).toBe(true);
+    expect(instance.isNamespaceLoaded('en', 'products')).toBe(false);
+  });
+});

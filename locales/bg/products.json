@@ -1,0 +1,47 @@
+{
+  "index": {
+    "heading": "Всички продукти",
+    "subheading": "Разгледайте нашата колекция от {{count}} артикула",
+    "empty": "Няма намерени продукти",
+    "filters": {
+      "category": "Категория",
+      "priceRange": "Ценови диапазон",
+      "inStock": "Само налични",
+      "featured": "Препоръчани"
+    },
+    "sort": {
+      "newest": "Най-нови",
+      "priceAsc": "Цена: ниска към висока",
+      "priceDesc": "Цена: висока към ниска",
+      "popular": "Най-популярни"
+    }
+  },
+  "show": {
+    "title": "Детайли за продукта",
+    "description": "Разгледайте нашия каталог",
+    "price": "Цена: {{amount}}",
+    "originalPrice": "Беше: {{amount}}",
+    "discount": "Спестете {{percent}}%",
+    "sku": "Код: {{code}}",
+    "availability": {
+      "inStock": "Наличен — остават {{count}}",
+      "outOfStock": "Изчерпан",
+      "backorder": "Наличен при поръчка"
+    },
+    "tabs": {
+      "description": "Описание",
+      "specifications": "Спецификации",
+      "reviews": "Отзиви ({{count}})"
+    },
+    "relatedProducts": "Може да харесате също"
+  },
+  "reviews": {
+    "heading": "Отзиви от клиенти",
+    "writeReview": "Напишете отзив",
+    "averageRating": "{{rating}} от 5 звезди",
+    "reviewCount": "На база {{count}} отзива",
+    "noReviews": "Все още няма отзиви. Бъдете първи!",
+    "helpful": "Полезен ли беше този отзив?",
+    "reported": "Отзивът е докладван"
+  }
+}

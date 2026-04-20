@@ -1,0 +1,18 @@
+{
+  "save": "Запази",
+  "delete": "Изтрий",
+  "edit": "Редактирай",
+  "create": "Създай",
+  "update": "Обнови",
+  "submit": "Изпрати",
+  "addToCart": "Добави в количката",
+  "removeFromCart": "Премахни от количката",
+  "checkout": "Плащане",
+  "signIn": "Вход",
+  "signOut": "Изход",
+  "register": "Създай акаунт",
+  "viewDetails": "Виж детайли",
+  "applyFilter": "Приложи филтър",
+  "clearFilters": "Изчисти всички филтри",
+  "sortBy": "Сортирай по {{field}}"
+}

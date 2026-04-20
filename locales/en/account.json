@@ -1,0 +1,35 @@
+{
+  "profile": {
+    "heading": "My Account",
+    "personalInfo": "Personal Information",
+    "name": "Full name",
+    "email": "Email address",
+    "phone": "Phone number",
+    "changePassword": "Change password",
+    "currentPassword": "Current password",
+    "newPassword": "New password",
+    "confirmPassword": "Confirm password",
+    "updated": "Profile updated successfully"
+  },
+  "orders": {
+    "heading": "Order History",
+    "empty": "You haven't placed any orders yet",
+    "orderNumber": "Order #{{number}}",
+    "placedOn": "Placed on {{date}}",
+    "status": {
+      "pending": "Pending",
+      "processing": "Processing",
+      "shipped": "Shipped",
+      "delivered": "Delivered",
+      "cancelled": "Cancelled"
+    },
+    "trackOrder": "Track order",
+    "reorder": "Order again"
+  },
+  "addresses": {
+    "heading": "Saved Addresses",
+    "addNew": "Add new address",
+    "setDefault": "Set as default",
+    "default": "Default address"
+  }
+}

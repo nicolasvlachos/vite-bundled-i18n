@@ -1,0 +1,26 @@
+{
+  "title": "Вашата количка",
+  "empty": "Количката ви е празна",
+  "emptyAction": "Започнете пазаруване",
+  "summary": {
+    "subtotal": "Междинна сума",
+    "shipping": "Доставка",
+    "tax": "ДДС",
+    "total": "Общо",
+    "freeShipping": "Безплатна доставка",
+    "estimatedDelivery": "Очаквана доставка: {{date}}"
+  },
+  "item": {
+    "quantity": "Бр: {{count}}",
+    "remove": "Премахни",
+    "moveToWishlist": "Премести в любими",
+    "priceEach": "{{amount}} за брой"
+  },
+  "promoCode": {
+    "label": "Промо код",
+    "placeholder": "Въведете код",
+    "apply": "Приложи",
+    "applied": "Код {{code}} приложен — {{discount}} отстъпка",
+    "invalid": "Невалиден промо код"
+  }
+}

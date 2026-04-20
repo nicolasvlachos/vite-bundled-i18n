@@ -1,0 +1,17 @@
+{
+  "ok": "OK",
+  "cancel": "Cancel",
+  "next": "Next",
+  "previous": "Previous",
+  "copyright": "All rights reserved",
+  "loading": "Loading...",
+  "error": "Something went wrong",
+  "retry": "Try again",
+  "close": "Close",
+  "confirm": "Confirm",
+  "yes": "Yes",
+  "no": "No",
+  "search": "Search",
+  "noResults": "No results found",
+  "backToHome": "Back to home"
+}

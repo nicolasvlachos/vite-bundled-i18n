@@ -1,0 +1,35 @@
+{
+  "profile": {
+    "heading": "Моят акаунт",
+    "personalInfo": "Лична информация",
+    "name": "Пълно име",
+    "email": "Имейл адрес",
+    "phone": "Телефонен номер",
+    "changePassword": "Смяна на парола",
+    "currentPassword": "Текуща парола",
+    "newPassword": "Нова парола",
+    "confirmPassword": "Потвърдете паролата",
+    "updated": "Профилът е обновен успешно"
+  },
+  "orders": {
+    "heading": "История на поръчките",
+    "empty": "Все още нямате поръчки",
+    "orderNumber": "Поръчка #{{number}}",
+    "placedOn": "Направена на {{date}}",
+    "status": {
+      "pending": "Изчакваща",
+      "processing": "В обработка",
+      "shipped": "Изпратена",
+      "delivered": "Доставена",
+      "cancelled": "Отменена"
+    },
+    "trackOrder": "Проследи поръчката",
+    "reorder": "Поръчай отново"
+  },
+  "addresses": {
+    "heading": "Запазени адреси",
+    "addNew": "Добави нов адрес",
+    "setDefault": "Задай като основен",
+    "default": "Основен адрес"
+  }
+}

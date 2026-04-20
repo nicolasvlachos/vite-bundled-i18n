@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "types": ["node", "vite/client"]
+  },
+  "include": [
+    "src/index.ts",
+    "src/react.ts",
+    "src/vanilla.ts",
+    "src/vue.ts",
+    "src/server-entry.ts",
+    "src/plugin.ts",
+    "src/global.d.ts",
+    "src/core/**/*.ts",
+    "src/react/**/*.ts",
+    "src/react/**/*.tsx",
+    "src/extractor/**/*.ts",
+    "src/plugin/**/*.ts",
+    "src/cli/**/*.ts"
+  ],
+  "exclude": [
+    "src/**/__tests__/**"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "appName": "Vite Store",
+  "tagline": "Modern shopping, simplified",
+  "nav": {
+    "home": "Home",
+    "products": "Products",
+    "cart": "Cart",
+    "account": "Account",
+    "about": "About Us"
+  },
+  "footer": {
+    "madeWith": "Made with {{framework}}",
+    "version": "Version {{version}}",
+    "privacy": "Privacy Policy",
+    "terms": "Terms of Service",
+    "contact": "Contact Us"
+  },
+  "meta": {
+    "title": "{{page}} — Vite Store",
+    "description": "Shop the best products at Vite Store"
+  }
+}
