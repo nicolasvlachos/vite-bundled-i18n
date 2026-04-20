@@ -241,6 +241,60 @@ describe('generateMissing', () => {
     expect(entry!.line).toBe(12);
   });
 
+  it('includes summary when missing key count exceeds 50', () => {
+    // Create an analysis with > 50 keys that are all missing
+    const allKeys: ExtractedKey[] = [];
+    for (let i = 0; i < 55; i++) {
+      allKeys.push(makeKey(`ns.key${i}`, { line: i + 1 }));
+    }
+
+    const analysis: ProjectAnalysis = {
+      routes: [
+        {
+          entryPoint: '/app/Page.tsx',
+          routeId: 'page',
+          scopes: ['ns'],
+          keys: allKeys,
+          files: ['/app/Page.tsx'],
+        },
+      ],
+      availableNamespaces: ['ns'],
+      allKeys,
+      sharedNamespaces: [],
+    };
+
+    // Empty available keys means all 55 keys will be missing
+    const availableKeys = new Map<string, string[]>();
+
+    const result = generateMissing(analysis, availableKeys);
+
+    expect(result.keys).toHaveLength(55);
+    expect(result.summary).toBeDefined();
+    expect(result.summary!.total).toBe(55);
+    expect(result.summary!.hint).toContain('localesDir structure');
+  });
+
+  it('does not include summary when missing key count is 50 or fewer', () => {
+    const allKeys: ExtractedKey[] = [];
+    for (let i = 0; i < 50; i++) {
+      allKeys.push(makeKey(`ns.key${i}`, { line: i + 1 }));
+    }
+
+    const analysis: ProjectAnalysis = {
+      routes: [],
+      availableNamespaces: ['ns'],
+      allKeys,
+      sharedNamespaces: [],
+    };
+
+    const availableKeys = new Map<string, string[]>();
+
+    const result = generateMissing(analysis, availableKeys);
+
+    expect(result.keys).toHaveLength(50);
+    expect(result.summary).toBeUndefined();
+  });
+
   it('reports empty keys array when nothing is missing', () => {
     const availableKeys = new Map<string, string[]>([
       ['products', ['index.heading']],

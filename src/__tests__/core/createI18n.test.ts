@@ -337,16 +337,17 @@ describe('createI18n', () => {
     })).toThrow('defaultLocale');
   });
 
-  it('logs a warning and continues when a namespace fails to load', async () => {
+  it('logs a consolidated error and continues when a namespace fails to load', async () => {
     vi.mocked(globalThis.fetch).mockRejectedValue(new Error('Network error'));
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const instance = createI18n(baseConfig);
     await instance.loadNamespaces('en', ['shared']);
 
-    expect(warnSpy).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0][0]).toContain('Cannot load translations');
     expect(instance.hasKey('en', 'shared.ok')).toBe(false);
-    warnSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
   it('returns cache stats and can unload namespaces/locales', async () => {
@@ -402,6 +403,99 @@ describe('createI18n', () => {
     expect(instance.isNamespaceLoaded('en', 'shared')).toBe(false);
     expect(instance.isNamespaceLoaded('en', 'products')).toBe(false);
     expect(instance.isNamespaceLoaded('en', 'cart')).toBe(true);
+  });
+
+  it('handles 404 gracefully for skipped scope bundles', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+    } as Response);
+
+    const instance = createI18n(baseConfig);
+    await instance.loadScope('en', 'feedback.index');
+
+    // Scope should be marked as loaded (silently)
+    expect(instance.isScopeLoaded('en', 'feedback.index')).toBe(true);
+    // No warning should have been logged
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
+  it('still errors on non-404 scope load failures', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+    } as Response);
+
+    const instance = createI18n(baseConfig);
+    await instance.loadScope('en', 'some.scope');
+
+    expect(instance.isScopeLoaded('en', 'some.scope')).toBe(false);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0][0]).toContain('Cannot load translations');
+
+    errorSpy.mockRestore();
+  });
+
+  it('consolidates multiple fetch failures into one error message', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
+
+    const instance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+      dictionaries: {
+        global: { include: ['shared.*'], priority: 1 },
+        admin: { include: ['admin.*'], priority: 2 },
+      },
+    });
+
+    await instance.loadAllDictionaries('en');
+    await instance.loadScope('en', 'products.index');
+
+    // Should emit exactly one consolidated error, not 3 separate warnings
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0][0]).toContain('Cannot load translations');
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it('warns once per missing key in dev mode', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const instance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+    });
+
+    // Translate a key that doesn't exist — should warn
+    instance.translate('en', 'missing.key');
+    instance.translate('en', 'missing.key'); // second call — should NOT warn again
+    instance.translate('en', 'another.missing'); // different key — should warn
+
+    const missingKeyWarns = warnSpy.mock.calls.filter(
+      call => typeof call[0] === 'string' && call[0].includes('Missing translation')
+    );
+    expect(missingKeyWarns).toHaveLength(2);
+    expect(missingKeyWarns[0][0]).toContain('missing.key');
+    expect(missingKeyWarns[1][0]).toContain('another.missing');
+
+    warnSpy.mockRestore();
   });
 
   it('does not evict pinned dictionary namespaces under namespace pressure', async () => {

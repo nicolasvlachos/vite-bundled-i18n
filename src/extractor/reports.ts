@@ -73,7 +73,7 @@ export interface MissingKeyEntry {
 export function generateMissing(
   analysis: ProjectAnalysis,
   availableKeys: Map<string, string[]>,
-): { keys: MissingKeyEntry[] } {
+): { summary?: { total: number; hint: string }; keys: MissingKeyEntry[] } {
   const missing: MissingKeyEntry[] = [];
 
   for (const key of analysis.allKeys) {
@@ -104,6 +104,16 @@ export function generateMissing(
 
       missing.push({ key: key.key, usedIn, line: key.line });
     }
+  }
+
+  if (missing.length > 50) {
+    return {
+      summary: {
+        total: missing.length,
+        hint: 'If most keys are missing, verify localesDir structure: {locale}/{namespace}.json',
+      },
+      keys: missing,
+    };
   }
 
   return { keys: missing };

@@ -163,6 +163,8 @@ export function generateBundles(
         totalPrunedCount += availableCount - keptCount;
       }
 
+      if (Object.keys(bundleData).length === 0) continue;
+
       const filePath = path.join(outDir, locale, `${plan.scope}.json`);
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(filePath, JSON.stringify(bundleData, null, 2));

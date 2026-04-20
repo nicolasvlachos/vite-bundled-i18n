@@ -116,6 +116,48 @@ await initI18n(config, {
 })
 ```
 
+## Inertia.js / Laravel SSR
+
+For Inertia apps, inject translations server-side so critical-path UI (nav, layout) renders without a loading flash.
+
+**Server (Laravel controller or middleware):**
+
+```php
+// AppServiceProvider or Inertia middleware
+Inertia::share('i18nResources', function () {
+    $locale = app()->getLocale();
+    $shared = json_decode(file_get_contents(resource_path("locales/{$locale}/shared.json")), true);
+    $global = json_decode(file_get_contents(resource_path("locales/{$locale}/global.json")), true);
+    return [
+        'locale' => $locale,
+        'resources' => ['shared' => $shared, 'global' => $global],
+    ];
+});
+```
+
+**Client (React entry):**
+
+```tsx
+import { I18nProvider } from 'vite-bundled-i18n/react';
+import { createI18n } from 'vite-bundled-i18n';
+
+const i18n = createI18n({ /* config */ });
+
+// Hydrate from Inertia shared data
+const { locale, resources } = usePage().props.i18nResources;
+for (const [namespace, data] of Object.entries(resources)) {
+  i18n.addResources(locale, namespace, data);
+}
+
+createRoot(el).render(
+  <I18nProvider instance={i18n} serverResources={resources}>
+    <App />
+  </I18nProvider>
+);
+```
+
+The `I18nProvider` detects `serverResources` and skips async dictionary loading for those namespaces.
+
 ## Data File Example
 
 ```ts

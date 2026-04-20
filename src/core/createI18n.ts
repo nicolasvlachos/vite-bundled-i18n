@@ -45,6 +45,20 @@ function resolveRuntimeCache(config: I18nConfig) {
   } as const;
 }
 
+function getInjectedI18nBase(): string | undefined {
+  return typeof __VITE_I18N_BASE__ !== 'undefined'
+    ? __VITE_I18N_BASE__
+    : undefined;
+}
+
+/**
+ * Resolves the base path for bundle fetches.
+ * Resolution order: config.publicBase > __VITE_I18N_BASE__ > '/__i18n'
+ */
+function resolveI18nBase(config: I18nConfig): string {
+  return config.publicBase ?? getInjectedI18nBase() ?? '/__i18n';
+}
+
 function getInjectedCompiledManifestUrl(): string | undefined {
   return typeof __VITE_I18N_COMPILED_MANIFEST__ !== 'undefined'
     ? __VITE_I18N_COMPILED_MANIFEST__
@@ -109,6 +123,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
 
   const store = createStore();
   const frozenConfig = Object.freeze({ ...config });
+  const i18nBase = resolveI18nBase(config);
   const runtimeCache = resolveRuntimeCache(config);
   const compiledManifestUrl = config.compiled?.manifestUrl ?? getInjectedCompiledManifestUrl();
   const useCompiledRuntime = shouldUseCompiledRuntime(config, compiledManifestUrl);
@@ -128,6 +143,23 @@ export function createI18n(config: I18nConfig): I18nInstance {
 
   /** The current scope set by useI18n, used for key tracking. */
   let activeScope: string | undefined;
+  /** Tracks whether a consolidated fetch error has been emitted. */
+  let fetchErrorEmitted = false;
+
+  /** Dedup set for dev-mode missing key warnings. */
+  const warnedMissingKeys = new Set<string>();
+
+  function handleFetchError(): void {
+    if (!fetchErrorEmitted) {
+      fetchErrorEmitted = true;
+      console.error(
+        'vite-bundled-i18n: Cannot load translations. ' +
+        'Ensure __i18n assets are accessible at the configured base path. ' +
+        'Are you running the Vite dev server, or have you built with the i18n plugin?'
+      );
+    }
+  }
+
   let compiledManifestPromise: Promise<CompiledManifestModule | null> | null = null;
   const compiledLocaleMaps = new Map<string, CompiledTranslationMap>();
 
@@ -311,6 +343,12 @@ export function createI18n(config: I18nConfig): I18nInstance {
     }
 
     recordUsage(key, namespace, locale, 'key-as-value');
+    if (import.meta.env?.DEV && !warnedMissingKeys.has(key)) {
+      warnedMissingKeys.add(key);
+      console.warn(
+        `vite-bundled-i18n: Missing translation for "${key}" in locale "${locale}". Returning key as fallback.`
+      );
+    }
     return key;
   }
 
@@ -395,7 +433,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
       }
 
       const reqInit = await resolveRequestInit(config.requestInit);
-      const bundle = await fetchBundle(locale, `_dict/${name}`, reqInit);
+      const bundle = await fetchBundle(i18nBase, locale, `_dict/${name}`, reqInit);
       for (const [namespace, data] of Object.entries(bundle)) {
         store.addResources(locale, namespace, data, {
           source: 'dictionary',
@@ -404,11 +442,8 @@ export function createI18n(config: I18nConfig): I18nInstance {
       }
       loadedDicts.add(dictKey);
       evictUnused();
-    } catch (error) {
-      console.warn(
-        `vite-bundled-i18n: Failed to load dictionary "${name}" for locale "${locale}".`,
-        error,
-      );
+    } catch {
+      handleFetchError();
     }
   }
 
@@ -445,7 +480,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
       }
 
       const reqInit = await resolveRequestInit(config.requestInit);
-      const bundle = await fetchBundle(locale, scope, reqInit);
+      const bundle = await fetchBundle(i18nBase, locale, scope, reqInit);
       for (const [namespace, data] of Object.entries(bundle)) {
         store.addResources(locale, namespace, data, {
           source: 'scope',
@@ -455,10 +490,11 @@ export function createI18n(config: I18nConfig): I18nInstance {
       loadedScopes.add(scopeKey);
       evictUnused();
     } catch (error) {
-      console.warn(
-        `vite-bundled-i18n: Failed to load scope "${scope}" for locale "${locale}".`,
-        error,
-      );
+      if (error instanceof Error && error.message.includes('404')) {
+        loadedScopes.add(scopeKey);
+        return;
+      }
+      handleFetchError();
     }
   }
 
@@ -484,11 +520,8 @@ export function createI18n(config: I18nConfig): I18nInstance {
             pinned: false,
           });
           evictUnused();
-        } catch (error) {
-          console.warn(
-            `vite-bundled-i18n: Failed to load namespace "${ns}" for locale "${locale}".`,
-            error,
-          );
+        } catch {
+          handleFetchError();
         }
       }
     }

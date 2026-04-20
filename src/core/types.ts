@@ -53,6 +53,29 @@ export interface I18nKeyMap {}
 export interface I18nParamsMap {}
 
 /**
+ * Augmentable interface for nested key structure.
+ * Enables progressive autocomplete: typing `t('feedback.` suggests
+ * `pages`, `actions`, etc. as next segments.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface I18nNestedKeys {}
+
+/**
+ * Augmentable interface for valid scope identifiers.
+ * When populated by the type generator, constrains `useI18n(scope)` to valid scopes.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface I18nScopeMap {}
+
+/**
+ * Resolves to the union of registered scope identifiers when `I18nScopeMap`
+ * has entries, or falls back to `string` when it's empty.
+ */
+export type ValidScope = keyof I18nScopeMap extends never
+  ? string
+  : keyof I18nScopeMap & string;
+
+/**
  * Resolves to the union of registered translation keys when `I18nKeyMap`
  * has entries, or falls back to `string` when it's empty (no generated types).
  */
@@ -230,6 +253,12 @@ export interface DictionaryConfig {
    * - `admin*` (namespace prefix)
    */
   include?: string[];
+  /**
+   * Key patterns to exclude from this dictionary, applied after `include`.
+   * Same pattern syntax as `include`. Use to carve out sub-namespaces
+   * that shouldn't be preloaded (e.g., large validation keys).
+   */
+  exclude?: string[];
   /** Higher priority dictionaries claim matching keys first. */
   priority?: number;
   /** Whether this dictionary should be pinned in the runtime cache. */
@@ -321,6 +350,12 @@ export interface I18nConfig {
    * - Function: called before each request, may be async (e.g., for refreshing auth tokens)
    */
   requestInit?: RequestInit | (() => RequestInit | Promise<RequestInit>);
+  /**
+   * Overrides the build-injected base path for translation bundle fetches.
+   * Useful for CDN or reverse proxy deployments where the runtime fetch URL
+   * differs from the Vite build `base`.
+   */
+  publicBase?: string;
 }
 
 /**

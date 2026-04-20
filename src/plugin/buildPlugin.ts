@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import type { Plugin, ResolvedConfig } from 'vite';
 import type { I18nSharedConfig } from '../core/config';
@@ -43,6 +44,7 @@ export interface EmitI18nBuildArtifactsResult {
   generatedOutDir: string;
   compiledOutDir?: string;
   typesOutPath?: string;
+  warnings: string[];
 }
 
 function resolveBuildPaths(options: EmitI18nBuildArtifactsOptions) {
@@ -103,7 +105,8 @@ export function emitI18nBuildArtifacts(
   });
 
   if (buildConfig.emitTypes !== false) {
-    writeTypes(localesDir, buildConfig.defaultLocale, typesOutPath);
+    const scopeNames = analysis.routes.map(r => r.routeId);
+    writeTypes(localesDir, buildConfig.defaultLocale, typesOutPath, scopeNames);
   }
 
   let compiledOutDir: string | undefined;
@@ -128,12 +131,38 @@ export function emitI18nBuildArtifacts(
     );
   }
 
+  const warnings: string[] = [];
+
+  // Count extracted keys vs bundled keys
+  const totalExtractedKeys = analysis.allKeys.filter(k => !k.dynamic).length;
+  const totalBundledKeys = bundles.reduce((sum, b) => sum + b.keyCount, 0);
+
+  if (totalExtractedKeys > 0 && totalBundledKeys === 0) {
+    const localeCheckDir = path.join(localesDir, buildConfig.defaultLocale);
+    let foundFiles: string[] = [];
+    try {
+      foundFiles = fs.readdirSync(localeCheckDir).filter(f => f.endsWith('.json'));
+    } catch { /* dir doesn't exist */ }
+
+    const hint = foundFiles.length === 0
+      ? `No JSON files found in ${localeCheckDir}`
+      : `Found ${foundFiles.length} file(s) but 0 keys matched`;
+
+    warnings.push(
+      `vite-bundled-i18n: 0 of ${totalExtractedKeys} extracted keys found in translation files.\n` +
+      `  Expected structure: ${localesDir}/{locale}/{namespace}.json\n` +
+      `  ${hint}\n` +
+      `  Hint: Subdirectories are not supported. Each namespace must be a single flat JSON file.`
+    );
+  }
+
   return {
     assetBundles: bundles.length,
     assetsOutDir,
     generatedOutDir,
     compiledOutDir,
     typesOutPath: buildConfig.emitTypes === false ? undefined : typesOutPath,
+    warnings,
   };
 }
 
@@ -150,9 +179,11 @@ export function i18nBuildPlugin(
     config(config) {
       const base = config.base ?? '/';
       const manifestUrl = joinPublicPath(base, `${assetsDir}/compiled/manifest.js`);
+      const i18nBase = joinPublicPath(base, assetsDir).replace(/\/$/, '');
       return {
         define: {
           __VITE_I18N_COMPILED_MANIFEST__: JSON.stringify(manifestUrl),
+          __VITE_I18N_BASE__: JSON.stringify(i18nBase),
         },
       };
     },
@@ -168,6 +199,10 @@ export function i18nBuildPlugin(
         sharedConfig,
         buildConfig,
       });
+
+      for (const warning of result.warnings) {
+        resolvedConfig.logger.warn(warning);
+      }
 
       resolvedConfig.logger.info(
         `vite-bundled-i18n: emitted ${result.assetBundles} i18n asset bundle(s) to ${path.relative(resolvedConfig.root, result.assetsOutDir)}`,

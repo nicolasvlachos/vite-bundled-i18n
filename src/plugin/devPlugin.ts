@@ -144,6 +144,16 @@ export function i18nDevPlugin(config: I18nDevPluginConfig): Plugin {
       projectRoot = resolvedConfig.root;
     },
     configureServer(server) {
+      // Watch locale files for changes and trigger reload
+      const localesPath = path.join(projectRoot, config.localesDir);
+      server.watcher.add(localesPath);
+
+      server.watcher.on('change', (filePath) => {
+        if (filePath.startsWith(localesPath) && filePath.endsWith('.json')) {
+          server.ws.send({ type: 'full-reload' });
+        }
+      });
+
       server.middlewares.use((req, res, next) => {
         if (!req.url?.startsWith('/__i18n/')) {
           return next();

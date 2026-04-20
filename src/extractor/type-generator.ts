@@ -63,6 +63,49 @@ export function extractPlaceholders(text: string): string[] {
 }
 
 /**
+ * Builds nested TypeScript interface content from flat dot-separated keys.
+ * Each leaf becomes `true`, each branch becomes a nested object.
+ */
+function buildNestedInterface(keys: string[]): string {
+  // Build tree structure
+  type TreeNode = { [segment: string]: TreeNode | true };
+  const tree: TreeNode = {};
+
+  for (const key of keys) {
+    const parts = key.split('.');
+    let current: TreeNode = tree;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (i === parts.length - 1) {
+        current[part] = true;
+      } else {
+        if (current[part] === true || current[part] === undefined) {
+          current[part] = {};
+        }
+        current = current[part] as TreeNode;
+      }
+    }
+  }
+
+  // Serialize to TypeScript
+  function serialize(node: TreeNode | true, indent: number): string {
+    if (node === true) return 'true';
+    const pad = '  '.repeat(indent);
+    const entries = Object.entries(node).sort(([a], [b]) => a.localeCompare(b));
+    const lines = entries.map(([key, value]) => {
+      const serialized = serialize(value, indent + 1);
+      if (serialized === 'true') {
+        return `${pad}'${key}': true;`;
+      }
+      return `${pad}'${key}': {\n${serialized}\n${pad}};`;
+    });
+    return lines.join('\n');
+  }
+
+  return serialize(tree, 2);
+}
+
+/**
  * Reads all `.json` files in `{localesDir}/{defaultLocale}/`, flattens each to
  * key paths, and returns a TypeScript declaration string that:
  *
@@ -74,7 +117,7 @@ export function extractPlaceholders(text: string): string[] {
  * When this file is present in the project, `t('shar...')` autocompletes to
  * `t('shared.ok')`. Without it, `t()` accepts any string.
  */
-export function generateTypes(localesDir: string, defaultLocale: string): string {
+export function generateTypes(localesDir: string, defaultLocale: string, scopes?: string[]): string {
   const localeDir = path.join(localesDir, defaultLocale);
 
   let entries: string[];
@@ -146,6 +189,26 @@ export function generateTypes(localesDir: string, defaultLocale: string): string
       .join('\n');
   }
 
+  // ---- I18nNestedKeys (progressive autocomplete) ----------------------------
+  let nestedKeysBlock: string;
+  if (allQualifiedKeys.length === 0) {
+    nestedKeysBlock = '  interface I18nNestedKeys {}';
+  } else {
+    const nestedBody = buildNestedInterface(allQualifiedKeys);
+    nestedKeysBlock = `  interface I18nNestedKeys {\n${nestedBody}\n  }`;
+  }
+
+  // ---- I18nScopeMap augmentation ----
+  let scopeMapEntries: string;
+  if (!scopes || scopes.length === 0) {
+    scopeMapEntries = '    // No scopes found';
+  } else {
+    scopeMapEntries = scopes
+      .sort()
+      .map((s) => `    '${s}': true;`)
+      .join('\n');
+  }
+
   const augmentation = [
     `declare module 'vite-bundled-i18n' {`,
     `  interface I18nKeyMap {`,
@@ -154,6 +217,12 @@ export function generateTypes(localesDir: string, defaultLocale: string): string
     ``,
     `  interface I18nParamsMap {`,
     paramsMapEntries,
+    `  }`,
+    ``,
+    nestedKeysBlock,
+    ``,
+    `  interface I18nScopeMap {`,
+    scopeMapEntries,
     `  }`,
     `}`,
   ].join('\n');
@@ -211,6 +280,12 @@ export function generateTypes(localesDir: string, defaultLocale: string): string
     '/** Key paths within a specific namespace (without the namespace prefix). */',
     namespaceKeyPathsType,
     '',
+    '/** Recursive dot-path expansion for nested key interfaces. */',
+    "type DotPrefix<K extends string> = K extends '' ? '' : `.${K}`;",
+    'type PathsOf<T> = T extends true',
+    "  ? ''",
+    "  : { [K in keyof T & string]: `${K}${DotPrefix<PathsOf<T[K]>>}` }[keyof T & string];",
+    '',
   ].join('\n');
 }
 
@@ -221,8 +296,9 @@ export function writeTypes(
   localesDir: string,
   defaultLocale: string,
   outPath: string,
+  scopes?: string[],
 ): void {
-  const content = generateTypes(localesDir, defaultLocale);
+  const content = generateTypes(localesDir, defaultLocale, scopes);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, content, 'utf-8');
 }

@@ -3,6 +3,7 @@ import type { DictionaryConfig } from '../core/types';
 export interface NormalizedDictionaryRule {
   name: string;
   include: string[];
+  exclude: string[];
   priority: number;
   pinned: boolean;
   order: number;
@@ -29,6 +30,7 @@ export function normalizeDictionaries(
     .map(([name, dict], order) => ({
       name,
       include: getDictionaryIncludePatterns(dict),
+      exclude: dict.exclude ?? [],
       priority: dict.priority ?? 0,
       pinned: dict.pinned ?? false,
       order,
@@ -68,7 +70,9 @@ export function resolveDictionaryOwnership(
 
   for (const key of availableKeys) {
     for (const rule of rules) {
-      if (rule.include.some((pattern) => keyMatchesPattern(key, pattern))) {
+      const included = rule.include.some((pattern) => keyMatchesPattern(key, pattern));
+      const excluded = rule.exclude.some((pattern) => keyMatchesPattern(key, pattern));
+      if (included && !excluded) {
         keyOwner.set(key, rule.name);
         dictionaryKeys.get(rule.name)!.add(key);
         const namespace = key.split('.')[0];

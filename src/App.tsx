@@ -33,6 +33,7 @@ function App() {
         {!['products', 'cart', 'account'].includes(page) && (
           <div style={{ padding: 24 }}>
             <h1>{t('shared.error', 'Something went wrong')}</h1>
+            <div></div>
             <a href="#products">{t('shared.backToHome', 'Back to home')}</a>
           </div>
         )}

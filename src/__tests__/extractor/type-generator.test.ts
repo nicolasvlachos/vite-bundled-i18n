@@ -119,3 +119,63 @@ describe('generateTypes', () => {
     expect(output).toContain("'products.show.eta': { date: Primitive };");
   });
 });
+
+describe('nested type generation', () => {
+  it('generates I18nNestedKeys interface', () => {
+    writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK', cancel: 'Cancel' }));
+    writeFile('locales/en/products.json', JSON.stringify({
+      show: { title: 'Details', price: 'Price' },
+      index: { heading: 'All' }
+    }));
+
+    const output = generateTypes(path.join(tmpDir, 'locales'), 'en');
+    expect(output).toContain('interface I18nNestedKeys');
+  });
+
+  it('contains nested structure for namespaces', () => {
+    writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK', cancel: 'Cancel' }));
+    writeFile('locales/en/products.json', JSON.stringify({
+      show: { title: 'Details', price: 'Price' },
+      index: { heading: 'All' }
+    }));
+
+    const output = generateTypes(path.join(tmpDir, 'locales'), 'en');
+    // The test locales should have at least one namespace with nested keys
+    // Check for the nested syntax pattern
+    expect(output).toMatch(/'[a-z]+': \{/); // nested object
+    expect(output).toMatch(/'[a-z]+': true;/); // leaf value
+  });
+
+  it('generates PathsOf helper type', () => {
+    writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK' }));
+
+    const output = generateTypes(path.join(tmpDir, 'locales'), 'en');
+    expect(output).toContain('type DotPrefix<');
+    expect(output).toContain('type PathsOf<');
+  });
+
+  it('generates empty I18nNestedKeys when no keys exist', () => {
+    // Use a path with no JSON files
+    const output = generateTypes('/nonexistent/path', 'en');
+    expect(output).toContain('interface I18nNestedKeys {}');
+  });
+});
+
+describe('scope type generation', () => {
+  it('generates I18nScopeMap with provided scopes', () => {
+    writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK' }));
+    const localesDir = path.join(tmpDir, 'locales');
+    const output = generateTypes(localesDir, 'en', ['products.index', 'products.show', 'admin.dashboard']);
+    expect(output).toContain("'admin.dashboard': true;");
+    expect(output).toContain("'products.index': true;");
+    expect(output).toContain("'products.show': true;");
+    expect(output).toContain('interface I18nScopeMap');
+  });
+
+  it('generates empty scope map comment when no scopes provided', () => {
+    writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK' }));
+    const localesDir = path.join(tmpDir, 'locales');
+    const output = generateTypes(localesDir, 'en');
+    expect(output).toContain('// No scopes found');
+  });
+});

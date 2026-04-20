@@ -323,4 +323,193 @@ describe('generateBundles', () => {
     );
     expect(dictData.ok).toBe('OK');
   });
+
+  it('skips writing scope bundle when dictionaries own all keys', () => {
+    writeLocale('en', 'feedback', {
+      index: { title: 'Feedback', submit: 'Submit' },
+    });
+
+    const analysis = makeAnalysis({
+      routes: [
+        {
+          entryPoint: '/app/pages/feedback/index.tsx',
+          routeId: 'feedback-index',
+          scopes: ['feedback'],
+          keys: [
+            makeKey('feedback.index.title'),
+            makeKey('feedback.index.submit'),
+          ],
+          files: ['/app/pages/feedback/index.tsx'],
+        },
+      ],
+      availableNamespaces: ['feedback'],
+    });
+
+    const bundles = generateBundles(analysis, {
+      localesDir: path.join(tmpDir, 'locales'),
+      locales: ['en'],
+      outDir: outDir(),
+      dictionaries: {
+        feedbackDict: {
+          include: ['feedback.*'],
+        },
+      },
+    });
+
+    // The scope bundle for 'feedback' should NOT be emitted
+    const scopeBundle = bundles.find((b) => b.name === 'feedback');
+    expect(scopeBundle).toBeUndefined();
+
+    // The file should not exist on disk
+    const scopeFilePath = path.join(outDir(), 'en', 'feedback.json');
+    expect(fs.existsSync(scopeFilePath)).toBe(false);
+
+    // The dictionary bundle SHOULD exist
+    const dictBundle = bundles.find((b) => b.name === '_dict/feedbackDict');
+    expect(dictBundle).toBeDefined();
+  });
+
+  it('dictionary bundles contain only actually-used keys, not all keys from the namespace (dead-key elimination)', () => {
+    // The feedback namespace has 5 keys in the locale file, but only 2 are
+    // actually referenced in source code. The dictionary claims 'feedback.*'
+    // which matches all of them, but only the 2 used keys should appear.
+    writeLocale('en', 'feedback', {
+      validation: {
+        required: 'Required',
+        minLength: 'Too short',
+        maxLength: 'Too long',
+        pattern: 'Invalid format',
+        email: 'Invalid email',
+      },
+      success: 'Success!',
+      error: 'Error!',
+    });
+
+    const analysis = makeAnalysis({
+      routes: [
+        {
+          entryPoint: '/app/pages/contact.tsx',
+          routeId: 'contact',
+          scopes: ['feedback'],
+          keys: [
+            makeKey('feedback.validation.required'),
+            makeKey('feedback.validation.email'),
+          ],
+          files: ['/app/pages/contact.tsx'],
+        },
+      ],
+      availableNamespaces: ['feedback'],
+    });
+
+    const bundles = generateBundles(analysis, {
+      localesDir: path.join(tmpDir, 'locales'),
+      locales: ['en'],
+      outDir: outDir(),
+      dictionaries: {
+        feedbackDict: {
+          include: ['feedback.*'],
+        },
+      },
+    });
+
+    const dictBundle = bundles.find((b) => b.name === '_dict/feedbackDict');
+    expect(dictBundle).toBeDefined();
+
+    const written = JSON.parse(
+      fs.readFileSync(dictBundle!.filePath, 'utf-8'),
+    );
+
+    // Only the 2 used keys should be present
+    expect(written).toEqual({
+      feedback: {
+        validation: {
+          required: 'Required',
+          email: 'Invalid email',
+        },
+      },
+    });
+
+    // Dead keys must NOT be present
+    expect(written.feedback.validation.minLength).toBeUndefined();
+    expect(written.feedback.validation.maxLength).toBeUndefined();
+    expect(written.feedback.validation.pattern).toBeUndefined();
+    expect(written.feedback.success).toBeUndefined();
+    expect(written.feedback.error).toBeUndefined();
+
+    // Verify counts: 7 total keys in file, 2 kept, 5 pruned
+    expect(dictBundle!.keyCount).toBe(2);
+    expect(dictBundle!.prunedCount).toBe(5);
+  });
+
+  it('dictionary dead-key elimination works across multiple routes', () => {
+    // Two routes reference different keys from the same dictionary namespace.
+    // The dictionary bundle should contain the union of used keys, but still
+    // exclude keys that no route references at all.
+    writeLocale('en', 'ui', {
+      button: { save: 'Save', cancel: 'Cancel', delete: 'Delete', reset: 'Reset' },
+      label: { name: 'Name', email: 'Email', phone: 'Phone' },
+    });
+
+    const analysis = makeAnalysis({
+      routes: [
+        {
+          entryPoint: '/app/pages/form.tsx',
+          routeId: 'form',
+          scopes: ['ui'],
+          keys: [
+            makeKey('ui.button.save'),
+            makeKey('ui.button.cancel'),
+            makeKey('ui.label.name'),
+          ],
+          files: ['/app/pages/form.tsx'],
+        },
+        {
+          entryPoint: '/app/pages/profile.tsx',
+          routeId: 'profile',
+          scopes: ['ui'],
+          keys: [
+            makeKey('ui.button.save'),
+            makeKey('ui.label.email'),
+          ],
+          files: ['/app/pages/profile.tsx'],
+        },
+      ],
+      availableNamespaces: ['ui'],
+    });
+
+    const bundles = generateBundles(analysis, {
+      localesDir: path.join(tmpDir, 'locales'),
+      locales: ['en'],
+      outDir: outDir(),
+      dictionaries: {
+        uiDict: {
+          include: ['ui.*'],
+        },
+      },
+    });
+
+    const dictBundle = bundles.find((b) => b.name === '_dict/uiDict');
+    expect(dictBundle).toBeDefined();
+
+    const written = JSON.parse(
+      fs.readFileSync(dictBundle!.filePath, 'utf-8'),
+    );
+
+    // Union of used keys from both routes
+    expect(written).toEqual({
+      ui: {
+        button: { save: 'Save', cancel: 'Cancel' },
+        label: { name: 'Name', email: 'Email' },
+      },
+    });
+
+    // Dead keys: button.delete, button.reset, label.phone
+    expect(written.ui.button.delete).toBeUndefined();
+    expect(written.ui.button.reset).toBeUndefined();
+    expect(written.ui.label.phone).toBeUndefined();
+
+    // 4 kept out of 7 total
+    expect(dictBundle!.keyCount).toBe(4);
+    expect(dictBundle!.prunedCount).toBe(3);
+  });
 });

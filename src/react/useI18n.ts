@@ -1,7 +1,7 @@
 import { useContext, useEffect, useState, useMemo } from 'react';
 import { I18nContext } from './context';
 import { createTranslations } from '../core/getTranslations';
-import type { UseI18nResult } from '../core/types';
+import type { UseI18nResult, ValidScope } from '../core/types';
 
 /**
  * React hook for accessing translations.
@@ -34,7 +34,7 @@ import type { UseI18nResult } from '../core/types';
  * t('shared.ok', 'OK'); // dictionaries still work
  * ```
  */
-export function useI18n(scope?: string): UseI18nResult {
+export function useI18n(scope?: ValidScope): UseI18nResult {
   const ctx = useContext(I18nContext);
 
   if (!ctx) {
@@ -46,7 +46,10 @@ export function useI18n(scope?: string): UseI18nResult {
 
   const { instance, version } = ctx;
   const locale = instance.getLocale();
-  const [scopeReady, setScopeReady] = useState(!scope);
+  const [scopeReady, setScopeReady] = useState(() => {
+    if (!scope) return true;
+    return instance.isScopeLoaded(locale, scope);
+  });
   const [loadedScopeKey, setLoadedScopeKey] = useState<string | null>(null);
 
   // Load scope bundle if needed — one HTTP request per scope

@@ -367,6 +367,93 @@ Useful instance APIs:
 - `unloadNamespace(locale, namespace)`
 - `evictUnused()`
 
+## Framework Integration (Laravel, Rails, Django)
+
+If your framework serves built assets under a URL prefix (e.g. `/build/`), set Vite's `base` option:
+
+```ts
+// vite.config.ts
+export default defineConfig({
+  base: '/build/',
+  plugins: [
+    i18nPlugin(i18nConfig, { /* ... */ }),
+  ],
+})
+```
+
+The i18n runtime reads the base path at build time automatically. No additional configuration needed.
+
+For non-standard setups (CDN, reverse proxy), use the `publicBase` override on the runtime instance:
+
+```ts
+const i18n = createI18n({
+  ...i18nConfig,
+  publicBase: 'https://cdn.example.com/__i18n',
+})
+```
+
+## Compiled Mode vs JSON Mode
+
+The build emits two formats for every bundle:
+
+| Format | File | Loading | Use when |
+|--------|------|---------|----------|
+| Compiled JS | `__i18n/compiled/{locale}/_dict/global.js` | Dynamic `import()` | Default for production. Faster parsing, cacheable by bundler. |
+| JSON | `__i18n/{locale}/_dict/global.json` | `fetch()` | Fallback. Works anywhere, no JS parser needed. |
+
+**Runtime behavior:**
+1. Tries compiled manifest first (`import()`)
+2. If compiled mode fails or is disabled, falls back to JSON (`fetch()`)
+
+**To disable compiled mode** (reduce build output):
+
+```ts
+i18nPlugin(i18nConfig, {
+  emitCompiled: false, // only emit JSON bundles
+})
+```
+
+**To force JSON mode at runtime:**
+
+```ts
+const i18n = createI18n({
+  ...config,
+  compiled: { enabled: false },
+})
+```
+
+**When to use which:**
+- **Compiled (default):** Best for SPAs. Modules are code-split and cached by the browser's module loader.
+- **JSON only:** Best for SSR, edge workers, or environments without ES module support. Also useful to reduce total build output size.
+
+## Type Generation
+
+Types are generated from locale JSON files during `vite build` and `npm run i18n -- generate`.
+
+The Vite dev plugin re-generates types automatically when locale JSON files change during `npm run dev`.
+
+If you modify translation files outside of dev mode, re-run manually:
+
+```bash
+npm run i18n -- generate
+```
+
+### Locale Directory Structure
+
+The plugin expects one flat JSON file per namespace:
+
+```
+locales/
+  en/
+    shared.json      ← namespace "shared"
+    products.json    ← namespace "products"
+  bg/
+    shared.json
+    products.json
+```
+
+Subdirectories within a locale folder are not supported. Each `{namespace}.json` file contains the nested keys for that namespace.
+
 ## 11. SSR
 
 Server:

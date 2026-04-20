@@ -39,6 +39,7 @@ Important config fields:
 - `requestInit` — custom `fetch()` options (headers, credentials, cache). Static object or function.
 - `cache` — in-memory eviction settings
 - `compiled` — compiled-manifest loading in production
+- `publicBase` — overrides the build-injected base path for bundle fetches (useful for CDN or reverse proxy)
 
 ```ts
 requestInit?: RequestInit | (() => RequestInit | Promise<RequestInit>)
@@ -85,6 +86,32 @@ compiled: {
 }
 ```
 
+### `instance.changeLocale(locale)`
+
+Switches the active locale. Automatically re-fetches all dictionaries and previously loaded scopes for the new locale, then notifies all consumers (React components re-render via context).
+
+```ts
+await i18n.changeLocale('bg');
+```
+
+In React, components using `useI18n()` automatically re-render when the locale changes. No manual wiring needed.
+
+**Example: Language switcher**
+
+```tsx
+function LanguageSwitcher() {
+  const { locale } = useI18n();
+  const i18n = useContext(I18nContext)?.instance;
+
+  return (
+    <select value={locale} onChange={(e) => i18n?.changeLocale(e.target.value)}>
+      <option value="en">English</option>
+      <option value="bg">Български</option>
+    </select>
+  );
+}
+```
+
 ### `getTranslations(instance, scope?, options?)`
 
 Loads dictionaries and optional scope, then returns the normalized translator object.
@@ -108,6 +135,27 @@ Methods:
 - `require(key, params?)`
 - `namespace(namespace, keyPrefix?)`
 - `forLocale(locale)`
+
+### `translations.namespace(ns, keyPrefix?)`
+
+Returns a scoped translator bound to a namespace. Keys are relative — no need to repeat the namespace prefix:
+
+```ts
+const shared = translations.namespace('shared');
+shared.get('actions.crud.cancel'); // resolves "shared.actions.crud.cancel"
+shared.has('ok'); // checks "shared.ok"
+
+const nav = translations.namespace('global', 'nav');
+nav.get('home'); // resolves "global.nav.home"
+```
+
+Available on the `translations` property from `useI18n()`:
+
+```tsx
+const { translations } = useI18n('products.show');
+const products = translations.namespace('products', 'show');
+products.get('title'); // "products.show.title"
+```
 
 ### `t()`, `hasKey()`, `getGlobalTranslations()`
 
@@ -135,9 +183,35 @@ Dictionary rules support:
 
 `include` accepts exact keys, namespace wildcards, and key-prefix patterns.
 
-Extraction options:
+### `extraction.keyFields`
 
-- `extraction.keyFields` — additional property names to scan as translation keys (additive to defaults: `labelKey`, `titleKey`, `translationKey`)
+Configures the AST extractor to recognize additional property names as translation keys in object literals.
+
+By default, the extractor finds keys in `t()`, `useI18n()`, `i18nKey()`, and `defineI18nData()` calls. With `keyFields`, it also scans object properties:
+
+```ts
+// i18n.config.ts
+export const i18nConfig = defineI18nConfig({
+  localesDir: 'locales',
+  extraction: {
+    keyFields: ['label', 'title', 'placeholder'],
+  },
+})
+```
+
+This causes the extractor to detect keys in config objects:
+
+```ts
+// These keys will be extracted automatically:
+const columns = [
+  { label: 'products.table.name', field: 'name' },
+  { title: 'products.table.price', field: 'price' },
+];
+```
+
+Without `keyFields`, you'd need to wrap each key in `i18nKey()`.
+
+The option is additive to the built-in defaults (`labelKey`, `titleKey`, `translationKey`):
 
 ```ts
 defineI18nConfig({
@@ -186,6 +260,26 @@ const { t, translations, ready } = useI18n('products.show')
 ```
 
 `ready` matters when a requested scope still needs to load.
+
+### `<I18nBoundary>`
+
+Boundary component that handles scope loading. Children only render once translations are ready, avoiding rules-of-hooks violations from early returns.
+
+```tsx
+import { I18nBoundary } from 'vite-bundled-i18n/react'
+
+<I18nBoundary scope="products.index" fallback={<Spinner />}>
+  <ProductsPage />
+</I18nBoundary>
+```
+
+Props:
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `scope` | `string` | required | Scope identifier to load |
+| `fallback` | `ReactNode` | `null` | Rendered while translations load |
+| `children` | `ReactNode` | required | Rendered once scope is ready |
 
 ## Vue
 

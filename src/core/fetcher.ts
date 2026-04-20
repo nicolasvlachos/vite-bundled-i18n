@@ -9,8 +9,9 @@ export function buildLoadPath(
   return `${base}/${locale}/${namespace}.json`;
 }
 
-export function buildBundlePath(locale: string, bundleName: string): string {
-  return `/__i18n/${locale}/${bundleName}.json`;
+export function buildBundlePath(base: string, locale: string, bundleName: string): string {
+  const normalized = base.endsWith('/') ? base : base + '/';
+  return normalized + locale + '/' + bundleName + '.json';
 }
 
 export async function fetchNamespace(
@@ -34,11 +35,12 @@ export async function fetchNamespace(
 }
 
 export async function fetchBundle(
+  base: string,
   locale: string,
   bundleName: string,
   requestInit?: RequestInit,
 ): Promise<Record<string, NestedTranslations>> {
-  const url = buildBundlePath(locale, bundleName);
+  const url = buildBundlePath(base, locale, bundleName);
   const response = requestInit
     ? await fetch(url, requestInit)
     : await fetch(url);

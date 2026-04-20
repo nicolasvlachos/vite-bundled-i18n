@@ -42,4 +42,6 @@ export type {
   ScopedTFunction,
   UseI18nResult,
   KeyUsageEntry,
+  I18nScopeMap,
+  ValidScope,
 } from './core/types';
