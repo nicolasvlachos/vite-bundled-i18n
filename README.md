@@ -1,55 +1,29 @@
 # vite-bundled-i18n
 
-Route-aware i18n for Vite apps.
-
-It gives you:
-
-- one translator API across React and non-React code
-- named dictionaries with ownership and priority
-- scope bundles for pages like `products.index`
-- generated key and placeholder types
-- production `__i18n/...` assets emitted by Vite
-- optional compiled-map runtime loading in production
-
-## Install
-
-Requirements:
-
-- Node `>=20`
-- a Vite app for plugin/build integration
-- `react` and `react-dom` only if you use the React adapter
+Route-aware internationalization for Vite. Each page loads only the translations it uses. Keys are fully typed. Production builds emit static, scope-matched bundles.
 
 ```bash
-npm install vite-bundled-i18n
+npm i vite-bundled-i18n
 ```
 
-If you use React:
+Requires Node `>=20` and Vite. React, Vue, and vanilla adapters are included — framework peer dependencies are optional.
 
-```bash
-npm install react react-dom
-```
+## Features
 
-If you use Vue:
+- **Scope bundles** — translations grouped by route (`products.index`) and loaded on demand
+- **Dictionary ownership** — named dictionaries claim keys by pattern with explicit priority
+- **Type generation** — TypeScript types for every key and placeholder, generated from source
+- **Compiled production output** — Vite plugin emits `__i18n/` assets as static JSON or compiled modules
+- **Multi-framework** — React, Vue, and vanilla JS share a single core
+- **SSR** — server-side rendering with automatic client hydration
+- **AST extraction** — finds translation keys in source without execution
 
-```bash
-npm install vue
-```
+## Setup
 
-For local package validation:
-
-```bash
-# in this repo
-npm run build
-npm pack
-
-# in your app
-npm install /absolute/path/to/vite-bundled-i18n-0.1.0.tgz
-```
-
-## Quick Start
+Three files wire everything together: a config that declares your locale directory and dictionaries (bundles that group related keys under a name, like `global` for shared UI strings), a runtime instance that holds locale state, and a Vite plugin that handles extraction, type generation, and bundle emission.
 
 ```ts
-// src/i18n.config.ts
+// src/i18n.config.ts — declares dictionaries and where locale JSON files live
 import { defineI18nConfig } from 'vite-bundled-i18n'
 
 export const i18nConfig = defineI18nConfig({
@@ -65,7 +39,7 @@ export const i18nConfig = defineI18nConfig({
 ```
 
 ```ts
-// src/i18n.ts
+// src/i18n.ts — runtime instance used by adapters and server code
 import { createI18n } from 'vite-bundled-i18n'
 import { i18nConfig } from './i18n.config'
 
@@ -79,7 +53,7 @@ export const i18n = createI18n({
 ```
 
 ```ts
-// vite.config.ts
+// vite.config.ts — plugin scans pages, extracts keys, emits bundles and types
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { i18nPlugin } from 'vite-bundled-i18n/plugin'
@@ -99,6 +73,8 @@ export default defineConfig({
 })
 ```
 
+### React
+
 ```tsx
 // src/main.tsx
 import { createRoot } from 'react-dom/client'
@@ -117,20 +93,22 @@ createRoot(document.getElementById('root')!).render(
 import { useI18n } from 'vite-bundled-i18n/react'
 
 export function ProductsPage() {
+  // t and translations.get are interchangeable — t is a shorthand alias.
+  // Both accept a key, optional placeholders, and an optional fallback string.
   const { t, translations, ready } = useI18n('products.index')
 
   if (!ready) return <div>{t('shared.loading', 'Loading...')}</div>
 
   return (
     <section>
-      <h1>{translations.get('products.index.heading', 'All Products')}</h1>
+      <h1>{t('products.index.heading', 'All Products')}</h1>
       <p>{t('products.index.subheading', { count: 24 }, 'Browse {{count}} items')}</p>
     </section>
   )
 }
 ```
 
-### Vue Quick Start
+### Vue
 
 ```ts
 import { createApp } from 'vue'
@@ -142,9 +120,9 @@ app.use(createI18nPlugin(i18n))
 app.mount('#app')
 ```
 
-## Public API Shape
+## API
 
-The main API is the translator object:
+The translator object returned by `useI18n` (React), `useI18n` (Vue), or `getTranslations` (vanilla):
 
 ```ts
 const translations = await getTranslations(i18n, 'products.index')
@@ -156,48 +134,20 @@ translations.has('actions.save')
 translations.namespace('global').get('nav.home')
 ```
 
-React returns the same shape plus top-level aliases:
+### Package Entries
 
-```ts
-const { t, get, has, tryGet, require, translations, ready, locale } = useI18n()
-```
-
-Package entries:
-
-- `vite-bundled-i18n`
-- `vite-bundled-i18n/react`
-- `vite-bundled-i18n/vanilla`
-- `vite-bundled-i18n/vue`
-- `vite-bundled-i18n/server`
-- `vite-bundled-i18n/plugin`
-
-## Data Files
-
-For data/config code, keep keys in data and resolve later:
-
-```ts
-import { defineI18nData, i18nKey } from 'vite-bundled-i18n'
-
-export const nav = defineI18nData([
-  { href: '/', labelKey: i18nKey('global.nav.home') },
-  { href: '/cart', labelKey: i18nKey('global.nav.cart') },
-])
-```
-
-The extractor understands these helpers.
-
-Avoid module-top-level eager translation:
-
-```ts
-// Avoid
-export const nav = [{ label: t('global.nav.home') }]
-```
-
-Store keys in data and resolve them later.
+| Entry | Purpose |
+|-------|---------|
+| `vite-bundled-i18n` | Core runtime and configuration |
+| `vite-bundled-i18n/react` | React adapter (`I18nProvider`, `useI18n`) |
+| `vite-bundled-i18n/vue` | Vue adapter (`createI18nPlugin`, `useI18n`) |
+| `vite-bundled-i18n/vanilla` | Framework-agnostic `getTranslations` |
+| `vite-bundled-i18n/server` | SSR utilities (`initServerI18n`) |
+| `vite-bundled-i18n/plugin` | Vite build plugin |
 
 ## Dictionaries
 
-Dictionaries are key-ownership rules, not component-file ownership rules:
+Dictionaries define key ownership — which translation keys belong to which bundle:
 
 ```ts
 dictionaries: {
@@ -213,39 +163,53 @@ dictionaries: {
 }
 ```
 
-Notes:
+- `include` accepts exact keys, namespace wildcards, and prefix patterns
+- Higher priority dictionaries claim keys first; lower priority dictionaries exclude already-owned keys
+- Pinned dictionaries remain in memory and are never evicted
 
-- `include` supports exact keys, namespace wildcards, and prefix patterns
-- higher priority dictionaries claim keys first
-- lower priority dictionaries exclude already-owned keys
-- legacy `keys: ['shared']` is still supported
+## Data Files
 
-## Server / SSR
+For configuration or navigation data that references translation keys, use the extraction helpers:
+
+```ts
+import { defineI18nData, i18nKey } from 'vite-bundled-i18n'
+
+export const nav = defineI18nData([
+  { href: '/', labelKey: i18nKey('global.nav.home') },
+  { href: '/cart', labelKey: i18nKey('global.nav.cart') },
+])
+```
+
+The AST extractor recognizes these helpers and includes referenced keys in scope analysis.
+
+## Server-Side Rendering
 
 ```ts
 import { initServerI18n } from 'vite-bundled-i18n/server'
 
 const { translations, scriptTag } = await initServerI18n(config, 'products.show')
 const html = renderToString(<App translations={translations} />)
-// Inject scriptTag into HTML
+// Inject scriptTag into the HTML response
 ```
 
-On the client, both `I18nProvider` (React) and `createI18nPlugin` (Vue) automatically detect and consume `window.__I18N_RESOURCES__` — no manual wiring needed.
+The React `I18nProvider` and Vue `createI18nPlugin` automatically detect and consume the injected `window.__I18N_RESOURCES__` on the client.
 
 ## Production Output
 
 During `vite build`, the plugin emits:
 
-- `__i18n/{locale}/_dict/{name}.json`
-- `__i18n/{locale}/{scope}.json`
-- `__i18n/compiled/manifest.js`
-- `__i18n/compiled/{locale}/...` compiled map modules
+```
+__i18n/{locale}/_dict/{name}.json
+__i18n/{locale}/{scope}.json
+__i18n/compiled/manifest.js
+__i18n/compiled/{locale}/...
+```
 
-The runtime can use emitted JSON bundles or the compiled manifest path automatically in production.
+The runtime resolves these assets automatically in production — no additional configuration required.
 
 ## Fetch Options
 
-Configure `requestInit` on `createI18n()` to set headers, credentials, or cache mode:
+Configure request behavior for translation loading:
 
 ```ts
 createI18n({
@@ -254,18 +218,11 @@ createI18n({
 })
 ```
 
-Supports static objects, sync functions, and async functions for dynamic auth tokens.
+Accepts a static `RequestInit` object, a sync function, or an async function for dynamic auth tokens.
 
 ## Cache
 
-The runtime stores translations in memory by namespace.
-
-- dictionaries can be pinned
-- repeated scope and dictionary loads are deduplicated
-- non-pinned namespaces can be evicted with LRU policy
-- fallback locale lookup still applies
-
-Example:
+In-memory translation cache with configurable eviction:
 
 ```ts
 cache: {
@@ -278,45 +235,13 @@ cache: {
 }
 ```
 
-## Release Flow
-
-Recommended local release sequence:
-
-```bash
-npm run lint
-npm test
-npm run build
-npm pack
-```
-
-Publish:
-
-```bash
-npm publish
-```
-
-## Docs
+## Documentation
 
 - [Getting Started](./docs/getting-started.md)
 - [API Reference](./docs/api.md)
 - [Architecture](./docs/architecture.md)
 - [Examples](./docs/examples.md)
 
-## Repo Demo
+## License
 
-The root Vite app in `src/` is also the reference demo for this package.
-
-Run:
-
-```bash
-npm install
-npm run dev
-```
-
-Build:
-
-```bash
-npm run build
-```
-
-That emits the demo app to `demo-dist/` and the generated translation assets to `demo-dist/__i18n/`.
+[MIT](./LICENSE)
