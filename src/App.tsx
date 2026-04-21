@@ -11,6 +11,13 @@ function getPage() {
   return window.location.hash.slice(1) || 'products'
 }
 
+type TOptions = 'bad' | 'good';
+
+const options : Record<TOptions, string> = {
+  bad: 'yes',
+  good: 'no'
+};
+
 function App() {
   const [page, setPage] = useState(getPage)
   const { t } = useI18n()
@@ -34,7 +41,8 @@ function App() {
           <div style={{ padding: 24 }}>
             <h1>{t('shared.error', 'Something went wrong')}</h1>
             <div></div>
-            <a href="#products">{t('shared.backToHome', 'Back to home')}</a>
+            <a href="#products">{t('products.show.discount', {  percent: 12}, 'Back to home')}</a>
+  
           </div>
         )}
       </main>

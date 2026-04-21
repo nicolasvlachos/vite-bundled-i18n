@@ -119,7 +119,7 @@ export default defineConfig({
       locales: ['en', 'bg'],
       defaultLocale: 'en',
       generatedOutDir: '.i18n',
-      // types default to '.i18n/i18n.d.ts' — add '.i18n' to tsconfig include
+      // types are generated to src/core/i18n-generated.ts by default
     }),
   ],
 })
@@ -308,7 +308,7 @@ export const nav = [{ label: t('global.nav.home') }]
 
 ## 9. Generated types
 
-`npm run dev`, `vite build`, and the CLI all write `.i18n/i18n.d.ts`.
+`npm run dev`, `vite build`, and the CLI all write `src/core/i18n-generated.ts`.
 
 That gives you:
 

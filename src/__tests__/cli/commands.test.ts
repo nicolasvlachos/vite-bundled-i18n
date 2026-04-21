@@ -69,7 +69,7 @@ function makeConfig(overrides?: Partial<CliConfig>): CliConfig {
     defaultLocale: 'en',
     rootDir: tmpDir,
     outDir: path.join(tmpDir, '.i18n'),
-    typesOutPath: path.join(tmpDir, '.i18n/i18n.d.ts'),
+    typesOutPath: path.join(tmpDir, 'src/core/i18n-generated.ts'),
     ...overrides,
   };
 }

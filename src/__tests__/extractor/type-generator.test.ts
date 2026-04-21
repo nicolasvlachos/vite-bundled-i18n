@@ -76,36 +76,34 @@ describe('generateTypes', () => {
     expect(output).toContain("'title': true;"); // products.show.title
     expect(output).toContain("'heading': true;"); // products.index.heading
 
-    // Namespace union
+    // Namespace names appear in the nested tree
     expect(output).toContain("'products'");
     expect(output).toContain("'shared'");
-
-    // NamespaceKeyPaths conditional type
-    expect(output).toContain("'show.title'");
-    expect(output).toContain("'ok'");
 
     // Header comment
     expect(output).toContain('Auto-generated');
 
-    // Params map — no flat I18nKeyMap, params only for keys WITH placeholders
+    // Params map — only keys WITH placeholders
     expect(output).toContain('interface I18nParamsMap');
     expect(output).not.toContain('interface I18nKeyMap');
     // products.show.price has no placeholders — should NOT appear in params map
     expect(output).not.toContain("'products.show.price':");
+
+    // File exports interfaces directly (imported by core/types.ts)
+    expect(output).toContain('export interface I18nNestedKeys');
   });
 
   it('handles empty locales directory', () => {
     fs.mkdirSync(path.join(tmpDir, 'locales/en'), { recursive: true });
     const output = generateTypes(path.join(tmpDir, 'locales'), 'en');
     expect(output).toContain('interface I18nNestedKeys {}');
-    expect(output).toContain('Namespace = never');
   });
 
   it('handles single namespace', () => {
     writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK' }));
     const output = generateTypes(path.join(tmpDir, 'locales'), 'en');
     expect(output).toContain("'ok': true;"); // in nested tree
-    expect(output).toContain("type Namespace = 'shared'");
+    expect(output).toContain("'shared'"); // namespace in tree
   });
 
   it('emits placeholder params map entries', () => {
@@ -115,8 +113,8 @@ describe('generateTypes', () => {
 
     const output = generateTypes(path.join(tmpDir, 'locales'), 'en');
 
-    expect(output).toContain("'products.show.price': { amount: Primitive };");
-    expect(output).toContain("'products.show.eta': { date: Primitive };");
+    expect(output).toContain("'products.show.price': { amount: TranslationValue };");
+    expect(output).toContain("'products.show.eta': { date: TranslationValue };");
   });
 });
 

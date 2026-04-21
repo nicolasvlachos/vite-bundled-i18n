@@ -158,7 +158,7 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
       const defaultLocale = options?.defaultLocale ?? 'en';
       const typesOutPath = options?.typesOutPath
         ? path.resolve(projectRoot, options.typesOutPath)
-        : path.join(projectRoot, '.i18n', 'i18n.d.ts');
+        : path.join(projectRoot, 'src', 'core', 'i18n-generated.ts');
 
       // Generate types on server start for dev-time autocomplete
       function regenerateTypes() {

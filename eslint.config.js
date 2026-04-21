@@ -21,6 +21,12 @@ export default defineConfig([
     },
   },
   {
+    files: ['src/core/i18n-generated.ts'],
+    rules: {
+      '@typescript-eslint/no-empty-object-type': 'off',
+    },
+  },
+  {
     files: ['src/__tests__/vue/**/*.ts'],
     rules: {
       'react-hooks/rules-of-hooks': 'off',

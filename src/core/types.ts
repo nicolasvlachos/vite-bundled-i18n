@@ -1,4 +1,15 @@
 import type { CompiledManifestModule } from './compiled-runtime';
+import type {
+  I18nNestedKeys,
+  I18nParamsMap,
+  I18nScopeMap,
+} from './i18n-generated';
+
+export type {
+  I18nNestedKeys,
+  I18nParamsMap,
+  I18nScopeMap,
+};
 
 /**
  * Recursive type representing nested translation JSON.
@@ -39,33 +50,9 @@ export type NestedTranslations = {
  * }
  * ```
  */
-// Intentionally empty — populated via module augmentation by the type generator.
+// I18nKeyMap is kept for backwards compatibility but no longer generated.
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface I18nKeyMap {}
-
-/**
- * Augmentable interface mapping fully qualified translation keys to their
- * placeholder parameter objects. Generated alongside {@link I18nKeyMap}.
- *
- * Keys with no placeholders should map to `{}`.
- */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface I18nParamsMap {}
-
-/**
- * Augmentable interface for nested key structure.
- * Enables progressive autocomplete: typing `t('feedback.` suggests
- * `pages`, `actions`, etc. as next segments.
- */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface I18nNestedKeys {}
-
-/**
- * Augmentable interface for valid scope identifiers.
- * When populated by the type generator, constrains `useI18n(scope)` to valid scopes.
- */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface I18nScopeMap {}
 
 /**
  * Resolves to the union of registered scope identifiers when `I18nScopeMap`
@@ -123,31 +110,20 @@ export type ParamsOf<K extends TranslationKey> =
     ? I18nParamsMap[K]
     : Record<string, Primitive>;
 
-type TranslateArgs<K extends TranslationKey> =
-  K extends keyof I18nParamsMap
-    ? keyof I18nParamsMap[K] extends never
-      ? [fallback?: string]
-      : [params: I18nParamsMap[K], fallback?: string]
-    : [fallback?: string] | [params: Record<string, unknown>, fallback?: string];
-
 /**
- * Translation function with overloaded signatures.
+ * Translation function.
  *
- * Supports two calling conventions:
- * - `t(key, fallback?)` — when no interpolation is needed
- * - `t(key, params, fallback?)` — when interpolation parameters are needed
+ * - `t(key)` or `t(key, fallback)` — for keys without placeholders
+ * - `t(key, params)` or `t(key, params, fallback)` — for keys with `{{placeholders}}`
  *
- * Overload resolution: if the second argument is a string, it is treated as a
- * fallback. If it is an object, it is treated as interpolation params.
- *
- * When generated types are present (`I18nKeyMap` is populated), the `key`
- * parameter is constrained to valid translation keys with full autocomplete.
- * Without generated types, it accepts any `string`.
+ * Params are type-checked per key: `t('cart.total', { amount: 9 })` enforces `{ amount }`.
  */
-export type TFunction = <K extends TranslationKey>(
-  key: K,
-  ...args: TranslateArgs<K>
-) => string;
+export type TFunction = {
+  <K extends keyof I18nParamsMap>(key: K, params: I18nParamsMap[K]): string;
+  <K extends keyof I18nParamsMap>(key: K, params: I18nParamsMap[K], fallback: string): string;
+  (key: TranslationKey): string;
+  (key: TranslationKey, fallback: string): string;
+};
 
 /**
  * Translation function for scoped/namespace-relative keys.
@@ -168,14 +144,10 @@ export type ScopedTFunction = {
  * Unlike {@link TFunction}, this function does not accept fallback strings
  * and does not degrade to key-as-value.
  */
-export type TryTFunction = <K extends TranslationKey>(
-  key: K,
-  ...args: K extends keyof I18nParamsMap
-    ? keyof I18nParamsMap[K] extends never
-      ? []
-      : [params: I18nParamsMap[K]]
-    : [] | [params: Record<string, unknown>]
-) => string | undefined;
+export type TryTFunction = {
+  <K extends keyof I18nParamsMap>(key: K, params: I18nParamsMap[K]): string | undefined;
+  (key: TranslationKey): string | undefined;
+};
 
 /**
  * Namespace-relative version of {@link TryTFunction}.
@@ -190,14 +162,10 @@ export type ScopedTryTFunction = {
  *
  * Like {@link TryTFunction}, this function does not accept fallback strings.
  */
-export type RequireTFunction = <K extends TranslationKey>(
-  key: K,
-  ...args: K extends keyof I18nParamsMap
-    ? keyof I18nParamsMap[K] extends never
-      ? []
-      : [params: I18nParamsMap[K]]
-    : [] | [params: Record<string, unknown>]
-) => string;
+export type RequireTFunction = {
+  <K extends keyof I18nParamsMap>(key: K, params: I18nParamsMap[K]): string;
+  (key: TranslationKey): string;
+};
 
 /**
  * Namespace-relative version of {@link RequireTFunction}.

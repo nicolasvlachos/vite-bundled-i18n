@@ -70,7 +70,7 @@ export default defineConfig({
       locales: ['en', 'bg'],
       defaultLocale: 'en',
       generatedOutDir: '.i18n',
-      // typesOutPath defaults to '.i18n/i18n.d.ts' — add '.i18n' to tsconfig include
+      // types are generated to src/core/i18n-generated.ts by default
     }),
   ],
 })

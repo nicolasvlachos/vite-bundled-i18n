@@ -113,7 +113,7 @@ describe('emitI18nBuildArtifacts', () => {
         locales: ['en', 'bg'],
         defaultLocale: 'en',
         generatedOutDir: '.i18n',
-        typesOutPath: '.i18n/i18n.d.ts',
+        typesOutPath: 'src/core/i18n-generated.ts',
       },
     });
 
@@ -122,7 +122,7 @@ describe('emitI18nBuildArtifacts', () => {
     expect(fs.existsSync(path.join(tmpDir, 'dist', '__i18n', 'en', 'products.index.json'))).toBe(true);
     expect(fs.existsSync(path.join(tmpDir, 'dist', '__i18n', 'compiled', 'manifest.js'))).toBe(true);
     expect(fs.existsSync(path.join(tmpDir, '.i18n', 'stats.json'))).toBe(true);
-    expect(fs.existsSync(path.join(tmpDir, '.i18n', 'i18n.d.ts'))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'src', 'core', 'i18n-generated.ts'))).toBe(true);
 
     const routeBundle = JSON.parse(
       fs.readFileSync(path.join(tmpDir, 'dist', '__i18n', 'en', 'products.index.json'), 'utf-8'),
@@ -185,7 +185,7 @@ describe('emitI18nBuildArtifacts', () => {
         locales: ['en', 'bg'],
         defaultLocale: 'en',
         generatedOutDir: '.i18n',
-        typesOutPath: '.i18n/i18n.d.ts',
+        typesOutPath: 'src/core/i18n-generated.ts',
       },
     });
 

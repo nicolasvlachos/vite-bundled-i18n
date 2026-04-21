@@ -420,7 +420,7 @@ Build config options:
 | `locales` | `string[]` | required | Supported locale codes |
 | `defaultLocale` | `string` | required | Fallback locale |
 | `generatedOutDir` | `string` | `'.i18n'` | Where to write reports/artifacts |
-| `typesOutPath` | `string` | `'.i18n/i18n.d.ts'` | Generated types location |
+| `typesOutPath` | `string` | `'src/core/i18n-generated.ts'` | Generated types location |
 | `assetsDir` | `string` | `'__i18n'` | Output assets directory name |
 | `emitTypes` | `boolean` | `true` | Generate TypeScript types |
 | `emitReports` | `boolean` | `true` | Generate analysis reports |
@@ -487,15 +487,7 @@ The React `I18nProvider` and Vue `createI18nPlugin` automatically detect and con
 
 ## Generated Types
 
-The type generator emits `.i18n/i18n.d.ts` (configurable via `typesOutPath`) that augments the package's interfaces via `declare module 'vite-bundled-i18n'`. Types are generated on `npm run dev` (auto, on startup and locale file changes) and during `npm run build`.
-
-Add `.i18n` to your tsconfig `include` so TypeScript picks up the generated types:
-
-```json
-{
-  "include": ["src", ".i18n"]
-}
-```
+The type generator writes `src/core/i18n-generated.ts` (configurable via `typesOutPath`). This file is directly imported by the package's core types — no module augmentation needed. Types are generated on `npm run dev` (auto, on startup and locale file changes) and during `npm run build`.
 
 ### `I18nNestedKeys`
 
