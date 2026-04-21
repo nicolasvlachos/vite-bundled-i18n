@@ -43,5 +43,7 @@ export type {
   UseI18nResult,
   KeyUsageEntry,
   I18nScopeMap,
+  I18nNestedKeys,
   ValidScope,
+  DotPath,
 } from './core/types';

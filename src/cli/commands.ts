@@ -21,7 +21,7 @@ export interface CliConfig {
   rootDir?: string;
   /** Output directory for generated bundles. Defaults to '.i18n'. */
   outDir?: string;
-  /** Output path for generated types. Defaults to 'src/i18n-types.d.ts'. */
+  /** Output path for generated types. Defaults to '.i18n/i18n.d.ts'. */
   typesOutPath?: string;
   /** Extraction scope. Defaults to 'global'. */
   extractionScope?: 'global' | 'scoped';
@@ -33,7 +33,7 @@ function resolveConfig(config: CliConfig) {
   const rootDir = config.rootDir ?? process.cwd();
   const outDir = config.outDir ?? path.join(rootDir, '.i18n');
   const typesOutPath =
-    config.typesOutPath ?? path.join(rootDir, 'src', 'i18n-types.d.ts');
+    config.typesOutPath ?? path.join(outDir, 'i18n.d.ts');
   const localesDir = path.isAbsolute(config.localesDir)
     ? config.localesDir
     : path.join(rootDir, config.localesDir);

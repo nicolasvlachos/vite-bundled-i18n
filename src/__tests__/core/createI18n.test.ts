@@ -505,4 +505,99 @@ describe('createI18n', () => {
     expect(instance.isNamespaceLoaded('en', 'shared')).toBe(true);
     expect(instance.isNamespaceLoaded('en', 'products')).toBe(false);
   });
+
+  it('uses resolveUrl for dictionary fetches when provided', async () => {
+    const resolveUrl = vi.fn((locale: string, type: string, name: string) =>
+      `/api/i18n/${locale}/${type}/${name}`
+    );
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ shared: { ok: 'OK' } }),
+    } as Response);
+
+    const instance = createI18n({
+      ...baseConfig,
+      dictionaries: { global: { include: ['shared.*'], priority: 1 } },
+      resolveUrl,
+    });
+
+    await instance.loadDictionary('en', 'global');
+
+    expect(resolveUrl).toHaveBeenCalledWith('en', 'dictionary', 'global');
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith('/api/i18n/en/dictionary/global');
+  });
+
+  it('uses resolveUrl for scope fetches when provided', async () => {
+    const resolveUrl = vi.fn((locale: string, type: string, name: string) =>
+      `/api/i18n/${locale}/${type}/${name}`
+    );
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ products: { title: 'Hi' } }),
+    } as Response);
+
+    const instance = createI18n({
+      ...baseConfig,
+      resolveUrl,
+    });
+
+    await instance.loadScope('en', 'products.index');
+
+    expect(resolveUrl).toHaveBeenCalledWith('en', 'scope', 'products.index');
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith('/api/i18n/en/scope/products.index');
+  });
+
+  it('uses resolveUrl for namespace fetches when provided', async () => {
+    const resolveUrl = vi.fn((locale: string, type: string, name: string) =>
+      `/api/i18n/${locale}/${type}/${name}`
+    );
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ ok: 'OK' }),
+    } as Response);
+
+    const instance = createI18n({
+      ...baseConfig,
+      resolveUrl,
+    });
+
+    await instance.loadNamespaces('en', ['shared']);
+
+    expect(resolveUrl).toHaveBeenCalledWith('en', 'namespace', 'shared');
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith('/api/i18n/en/namespace/shared');
+  });
+
+  it('uses resolveUrl for manifest when provided', () => {
+    const resolveUrl = vi.fn((locale: string, type: string, name: string) =>
+      `/cdn/i18n/${type}/${name}.js`
+    );
+
+    createI18n({
+      ...baseConfig,
+      resolveUrl,
+    });
+
+    // The manifest URL is resolved at init time
+    expect(resolveUrl).toHaveBeenCalledWith('en', 'manifest', 'manifest');
+  });
+
+  it('falls back to default paths when resolveUrl is not provided', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ shared: { ok: 'OK' } }),
+    } as Response);
+
+    const instance = createI18n({
+      ...baseConfig,
+      dictionaries: { global: { include: ['shared.*'], priority: 1 } },
+    });
+
+    await instance.loadDictionary('en', 'global');
+
+    // Default path: /__i18n/en/_dict/global.json
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith('/__i18n/en/_dict/global.json');
+  });
 });

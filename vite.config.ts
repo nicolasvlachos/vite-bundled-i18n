@@ -15,7 +15,6 @@ export default defineConfig({
       locales: ['en', 'bg'],
       defaultLocale: 'en',
       generatedOutDir: '.i18n',
-      typesOutPath: 'src/i18n-types.d.ts',
       extractionScope: 'global',
     }),
   ],

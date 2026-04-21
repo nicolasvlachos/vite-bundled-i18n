@@ -62,6 +62,44 @@ requestInit: async () => ({
 })
 ```
 
+### `resolveUrl`
+
+Custom URL resolver for all translation fetches. Controls WHERE translations are fetched from. Use alongside `requestInit` which controls HOW (headers, credentials).
+
+```ts
+resolveUrl?: (locale: string, type: 'dictionary' | 'scope' | 'namespace' | 'manifest', name: string) => string
+```
+
+| `type` | `name` example | Default URL pattern |
+|---|---|---|
+| `dictionary` | `shared`, `feedback` | `{base}/{locale}/_dict/{name}.json` |
+| `scope` | `feedback.index` | `{base}/{locale}/{name}.json` |
+| `namespace` | `feedback` | `{localesDir}/{locale}/{name}.json` |
+| `manifest` | `manifest` | `{base}/compiled/manifest.js` |
+
+Examples:
+
+```ts
+// Laravel route serving translations
+resolveUrl: (locale, type, name) => {
+  if (type === 'manifest') return `/build/__i18n/compiled/manifest.js`;
+  return `/api/translations/${locale}/${type}/${name}`;
+}
+
+// CDN
+resolveUrl: (locale, type, name) => {
+  const cdn = 'https://cdn.example.com/i18n/v3';
+  if (type === 'dictionary') return `${cdn}/${locale}/_dict/${name}.json`;
+  return `${cdn}/${locale}/${name}.json`;
+}
+
+// Single endpoint per locale
+resolveUrl: (locale, type, name) =>
+  `/api/i18n/${locale}?type=${type}&name=${name}`
+```
+
+When `resolveUrl` is not set, the runtime uses `publicBase` (or build-injected `__VITE_I18N_BASE__`) with the default URL patterns.
+
 Keep the runtime cache shape but without `fetch`:
 
 ```ts
@@ -176,12 +214,13 @@ Shared config for the runtime and Vite plugin.
 
 Dictionary rules support:
 
-- `keys`
-- `include`
-- `priority`
-- `pinned`
+- `keys` — legacy namespace names (equivalent to `include: ['namespace.*']` per entry)
+- `include` — key ownership patterns: `shared.*`, `checkout.summary.*`, `shared.ok`, `admin*`
+- `exclude` — remove matching keys after `include` (same pattern syntax). Use to carve out large sub-namespaces you don't need client-side (e.g. `shared.validation.*`)
+- `priority` — higher priority dictionaries claim matching keys first
+- `pinned` — pinned dictionaries remain in memory and are never evicted
 
-`include` accepts exact keys, namespace wildcards, and key-prefix patterns.
+Dictionary bundles include ALL keys from matching namespaces (minus `exclude`). No tree-shaking by extracted keys — dictionaries are the "preload everything" layer. Only scope bundles are pruned to page-specific keys.
 
 ### `extraction.keyFields`
 
@@ -373,12 +412,19 @@ Dev:
 - serves `__i18n/{locale}/_dict/{name}.json`
 - serves `__i18n/{locale}/{scope}.json`
 
-Build:
+Build config options:
 
-- emits static JSON bundle assets
-- emits compiled manifest/modules
-- writes types
-- writes reports
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `pages` | `string[]` | required | Glob patterns for route entry points |
+| `locales` | `string[]` | required | Supported locale codes |
+| `defaultLocale` | `string` | required | Fallback locale |
+| `generatedOutDir` | `string` | `'.i18n'` | Where to write reports/artifacts |
+| `typesOutPath` | `string` | `'.i18n/i18n.d.ts'` | Generated types location |
+| `assetsDir` | `string` | `'__i18n'` | Output assets directory name |
+| `emitTypes` | `boolean` | `true` | Generate TypeScript types |
+| `emitReports` | `boolean` | `true` | Generate analysis reports |
+| `emitCompiled` | `boolean` | `true` | Generate compiled JS modules |
 
 ### `i18nDevPlugin(sharedConfig)`
 
@@ -438,3 +484,59 @@ const html = renderToString(<App translations={translations} />)
 ```
 
 The React `I18nProvider` and Vue `createI18nPlugin` automatically detect and consume `window.__I18N_RESOURCES__` on the client — no manual wiring needed.
+
+## Generated Types
+
+The type generator emits `.i18n/i18n.d.ts` (configurable via `typesOutPath`) that augments the package's interfaces via `declare module 'vite-bundled-i18n'`. Types are generated on `npm run dev` (auto, on startup and locale file changes) and during `npm run build`.
+
+Add `.i18n` to your tsconfig `include` so TypeScript picks up the generated types:
+
+```json
+{
+  "include": ["src", ".i18n"]
+}
+```
+
+### `I18nNestedKeys`
+
+Nested tree of all translation keys. This is the single source of truth for `TranslationKey`. Enables progressive autocomplete — the IDE suggests one level at a time instead of dumping thousands of flat strings.
+
+```ts
+interface I18nNestedKeys {
+  feedback: {
+    pages: {
+      index: { title: true; description: true };
+    };
+    actions: { delete: true; view: true };
+  };
+}
+```
+
+### `TranslationKey`
+
+Derived from `DotPath<I18nNestedKeys>`. Resolves to `'feedback.pages.index.title' | 'feedback.pages.index.description' | ...` — but the IDE explores it progressively via the nested tree. Falls back to `string` when no types are generated.
+
+### `I18nParamsMap`
+
+Flat map of keys that have `{{placeholder}}` interpolation. Only parameterized keys are listed — keys without placeholders are omitted.
+
+```ts
+interface I18nParamsMap {
+  'cart.item.quantity': { count: Primitive };
+  'products.show.price': { amount: Primitive };
+}
+```
+
+This powers compile-time enforcement: `t('cart.item.quantity')` without `{ count }` is a type error.
+
+### `I18nScopeMap`
+
+Valid scope identifiers from page scanning. Constrains `useI18n(scope)` so typos like `useI18n('feedbak.index')` are caught at compile time.
+
+### `DotPath<T>`
+
+Utility type exported from the package. Converts a nested tree type to a union of dot-separated paths. Available for advanced use but typically consumed indirectly via `TranslationKey`.
+
+### `ValidScope`
+
+Union of valid scope identifiers when `I18nScopeMap` is populated, or `string` when no types are generated.

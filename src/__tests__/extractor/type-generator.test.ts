@@ -71,12 +71,10 @@ describe('generateTypes', () => {
 
     const output = generateTypes(path.join(tmpDir, 'locales'), 'en');
 
-    // TranslationKey should contain all fully qualified keys
-    expect(output).toContain("'products.show.title'");
-    expect(output).toContain("'products.show.price'");
-    expect(output).toContain("'products.index.heading'");
-    expect(output).toContain("'shared.ok'");
-    expect(output).toContain("'shared.cancel'");
+    // Nested keys tree should contain all keys
+    expect(output).toContain('interface I18nNestedKeys');
+    expect(output).toContain("'title': true;"); // products.show.title
+    expect(output).toContain("'heading': true;"); // products.index.heading
 
     // Namespace union
     expect(output).toContain("'products'");
@@ -89,22 +87,24 @@ describe('generateTypes', () => {
     // Header comment
     expect(output).toContain('Auto-generated');
 
-    // Params map augmentation
+    // Params map — no flat I18nKeyMap, params only for keys WITH placeholders
     expect(output).toContain('interface I18nParamsMap');
-    expect(output).toContain("'products.show.price': {};");
+    expect(output).not.toContain('interface I18nKeyMap');
+    // products.show.price has no placeholders — should NOT appear in params map
+    expect(output).not.toContain("'products.show.price':");
   });
 
   it('handles empty locales directory', () => {
     fs.mkdirSync(path.join(tmpDir, 'locales/en'), { recursive: true });
     const output = generateTypes(path.join(tmpDir, 'locales'), 'en');
-    expect(output).toContain('TranslationKey');
-    expect(output).toContain('never'); // no keys
+    expect(output).toContain('interface I18nNestedKeys {}');
+    expect(output).toContain('Namespace = never');
   });
 
   it('handles single namespace', () => {
     writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK' }));
     const output = generateTypes(path.join(tmpDir, 'locales'), 'en');
-    expect(output).toContain("'shared.ok'");
+    expect(output).toContain("'ok': true;"); // in nested tree
     expect(output).toContain("type Namespace = 'shared'");
   });
 
@@ -146,12 +146,14 @@ describe('nested type generation', () => {
     expect(output).toMatch(/'[a-z]+': true;/); // leaf value
   });
 
-  it('generates PathsOf helper type', () => {
+  it('does not emit DotPath helper (lives in core types instead)', () => {
     writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK' }));
 
     const output = generateTypes(path.join(tmpDir, 'locales'), 'en');
-    expect(output).toContain('type DotPrefix<');
-    expect(output).toContain('type PathsOf<');
+    // DotPath now lives in src/core/types.ts, not in the generated file
+    expect(output).not.toContain('type DotPath<');
+    expect(output).not.toContain('type DotPrefix<');
+    expect(output).not.toContain('type PathsOf<');
   });
 
   it('generates empty I18nNestedKeys when no keys exist', () => {

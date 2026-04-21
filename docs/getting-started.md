@@ -32,7 +32,7 @@ npm run build
 npm pack
 
 # in your app
-npm install /absolute/path/to/vite-bundled-i18n-0.1.0.tgz
+npm install /absolute/path/to/vite-bundled-i18n-<version>.tgz
 ```
 
 ## 1. Translation files
@@ -119,7 +119,7 @@ export default defineConfig({
       locales: ['en', 'bg'],
       defaultLocale: 'en',
       generatedOutDir: '.i18n',
-      typesOutPath: 'src/i18n-types.d.ts',
+      // types default to '.i18n/i18n.d.ts' — add '.i18n' to tsconfig include
     }),
   ],
 })
@@ -308,7 +308,7 @@ export const nav = [{ label: t('global.nav.home') }]
 
 ## 9. Generated types
 
-`vite build` or the CLI writes `src/i18n-types.d.ts`.
+`npm run dev`, `vite build`, and the CLI all write `.i18n/i18n.d.ts`.
 
 That gives you:
 

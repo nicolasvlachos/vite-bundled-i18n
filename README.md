@@ -1,6 +1,6 @@
 # vite-bundled-i18n
 
-Route-aware internationalization for Vite. Each page loads only the translations it uses. Keys are fully typed. Production builds emit static, scope-matched bundles.
+Route-aware internationalization for Vite. Each page loads only the translations it uses. Keys are fully typed with progressive autocomplete. Production builds emit static, scope-matched bundles.
 
 ```bash
 npm i vite-bundled-i18n
@@ -11,12 +11,14 @@ Requires Node `>=20` and Vite. React, Vue, and vanilla adapters are included —
 ## Features
 
 - **Scope bundles** — translations grouped by route (`products.index`) and loaded on demand
-- **Dictionary ownership** — named dictionaries claim keys by pattern with explicit priority
-- **Type generation** — TypeScript types for every key and placeholder, generated from source
+- **Dictionary ownership** — named dictionaries claim keys by pattern, with `include`/`exclude` and priority
+- **Progressive autocomplete** — nested types let the IDE suggest one level at a time (`t('feedback.` → `pages`, `actions`, ...)
+- **Placeholder validation** — `t('cart.total', { amount: 9.99 })` is type-checked against `{{amount}}` in the JSON
 - **Compiled production output** — Vite plugin emits `__i18n/` assets as static JSON or compiled modules
 - **Multi-framework** — React, Vue, and vanilla JS share a single core
 - **SSR** — server-side rendering with automatic client hydration
-- **AST extraction** — finds translation keys in source without execution
+- **AST extraction** — finds translation keys in source without execution, including `t()` passed as arguments to helper functions
+- **Custom URL resolution** — `resolveUrl` callback for CDN, API endpoints, or any non-standard deployment
 
 ## Setup
 
@@ -31,6 +33,7 @@ export const i18nConfig = defineI18nConfig({
   dictionaries: {
     global: {
       include: ['shared.*', 'global.*', 'actions.*'],
+      exclude: ['shared.validation.*'], // optional — carve out large sub-namespaces
       priority: 1,
       pinned: true,
     },
@@ -67,11 +70,13 @@ export default defineConfig({
       locales: ['en', 'bg'],
       defaultLocale: 'en',
       generatedOutDir: '.i18n',
-      typesOutPath: 'src/i18n-types.d.ts',
+      // typesOutPath defaults to '.i18n/i18n.d.ts' — add '.i18n' to tsconfig include
     }),
   ],
 })
 ```
+
+Types are generated automatically on `npm run dev` (on server start and when locale files change) and during `npm run build`. No manual step needed.
 
 ### React
 
@@ -93,8 +98,8 @@ createRoot(document.getElementById('root')!).render(
 import { useI18n } from 'vite-bundled-i18n/react'
 
 export function ProductsPage() {
-  // t and translations.get are interchangeable — t is a shorthand alias.
-  // Both accept a key, optional placeholders, and an optional fallback string.
+  // t() has full autocomplete — type 't('products.' and the IDE suggests the next segment.
+  // Placeholders are type-checked: t('cart.total', { amount }) enforces { amount: Primitive }.
   const { t, translations, ready } = useI18n('products.index')
 
   if (!ready) return <div>{t('shared.loading', 'Loading...')}</div>
@@ -106,6 +111,16 @@ export function ProductsPage() {
     </section>
   )
 }
+```
+
+Use `I18nBoundary` to avoid rules-of-hooks violations from early returns:
+
+```tsx
+import { I18nBoundary } from 'vite-bundled-i18n/react'
+
+<I18nBoundary scope="products.index" fallback={<Spinner />}>
+  <ProductsPage />
+</I18nBoundary>
 ```
 
 ### Vue
@@ -134,12 +149,20 @@ translations.has('actions.save')
 translations.namespace('global').get('nav.home')
 ```
 
+### Locale Switching
+
+```ts
+await i18n.changeLocale('bg')
+```
+
+All React/Vue consumers re-render automatically.
+
 ### Package Entries
 
 | Entry | Purpose |
 |-------|---------|
 | `vite-bundled-i18n` | Core runtime and configuration |
-| `vite-bundled-i18n/react` | React adapter (`I18nProvider`, `useI18n`) |
+| `vite-bundled-i18n/react` | React adapter (`I18nProvider`, `useI18n`, `I18nBoundary`) |
 | `vite-bundled-i18n/vue` | Vue adapter (`createI18nPlugin`, `useI18n`) |
 | `vite-bundled-i18n/vanilla` | Framework-agnostic `getTranslations` |
 | `vite-bundled-i18n/server` | SSR utilities (`initServerI18n`) |
@@ -147,12 +170,13 @@ translations.namespace('global').get('nav.home')
 
 ## Dictionaries
 
-Dictionaries define key ownership — which translation keys belong to which bundle:
+Dictionaries define key ownership — which namespaces are preloaded and available globally:
 
 ```ts
 dictionaries: {
   global: {
     include: ['shared.*', 'global.*', 'actions.*'],
+    exclude: ['shared.validation.*'], // carve out sub-namespaces you don't need client-side
     priority: 1,
     pinned: true,
   },
@@ -164,8 +188,29 @@ dictionaries: {
 ```
 
 - `include` accepts exact keys, namespace wildcards, and prefix patterns
-- Higher priority dictionaries claim keys first; lower priority dictionaries exclude already-owned keys
+- `exclude` removes matching keys from the dictionary (applied after `include`)
+- Higher priority dictionaries claim keys first; lower priority dictionaries skip already-owned keys
 - Pinned dictionaries remain in memory and are never evicted
+- Dictionary bundles include ALL keys from matching namespaces — no tree-shaking. Scope bundles are the per-page optimization layer.
+
+## Custom URL Resolution
+
+For non-standard deployments (custom API routes, CDN, single endpoint), use `resolveUrl`:
+
+```ts
+const i18n = createI18n({
+  ...i18nConfig,
+  locale: 'en',
+  defaultLocale: 'en',
+  supportedLocales: ['en', 'bg'],
+  resolveUrl: (locale, type, name) => {
+    // type: 'dictionary' | 'scope' | 'namespace' | 'manifest'
+    return `/api/translations/${locale}/${type}/${name}`
+  },
+})
+```
+
+When not set, the runtime uses the build-injected base path from Vite's `base` config automatically.
 
 ## Data Files
 
@@ -180,7 +225,7 @@ export const nav = defineI18nData([
 ])
 ```
 
-The AST extractor recognizes these helpers and includes referenced keys in scope analysis.
+The AST extractor recognizes these helpers and includes referenced keys in scope analysis. It also detects `t()` and `get()` calls in helper functions that receive the translation function as a parameter.
 
 ## Server-Side Rendering
 
@@ -205,7 +250,7 @@ __i18n/compiled/manifest.js
 __i18n/compiled/{locale}/...
 ```
 
-The runtime resolves these assets automatically in production — no additional configuration required.
+The runtime resolves these assets automatically in production. For frameworks that serve built assets under a prefix (e.g. Laravel with `base: '/build/'`), the plugin reads Vite's resolved `base` config — no manual path configuration needed.
 
 ## Fetch Options
 
@@ -218,7 +263,7 @@ createI18n({
 })
 ```
 
-Accepts a static `RequestInit` object, a sync function, or an async function for dynamic auth tokens.
+Accepts a static `RequestInit` object, a sync function, or an async function for dynamic auth tokens. Works alongside `resolveUrl` — `resolveUrl` controls WHERE to fetch, `requestInit` controls HOW.
 
 ## Cache
 

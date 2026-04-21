@@ -59,7 +59,7 @@ export interface I18nDevPluginOptions {
   assetsDir?: string;
   /** Default locale for type generation. Required for dev-time autocomplete. */
   defaultLocale?: string;
-  /** Path to write generated types. Defaults to `src/i18n-types.d.ts`. */
+  /** Path to write generated types. Defaults to `.i18n/i18n.d.ts`. */
   typesOutPath?: string;
 }
 
@@ -158,7 +158,7 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
       const defaultLocale = options?.defaultLocale ?? 'en';
       const typesOutPath = options?.typesOutPath
         ? path.resolve(projectRoot, options.typesOutPath)
-        : path.join(projectRoot, 'src', 'i18n-types.d.ts');
+        : path.join(projectRoot, '.i18n', 'i18n.d.ts');
 
       // Generate types on server start for dev-time autocomplete
       function regenerateTypes() {

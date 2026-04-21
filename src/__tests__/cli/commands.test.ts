@@ -69,7 +69,7 @@ function makeConfig(overrides?: Partial<CliConfig>): CliConfig {
     defaultLocale: 'en',
     rootDir: tmpDir,
     outDir: path.join(tmpDir, '.i18n'),
-    typesOutPath: path.join(tmpDir, 'src/i18n-types.d.ts'),
+    typesOutPath: path.join(tmpDir, '.i18n/i18n.d.ts'),
     ...overrides,
   };
 }
@@ -97,7 +97,7 @@ describe('generate', () => {
     // Check types file exists
     expect(fs.existsSync(config.typesOutPath!)).toBe(true);
     const typesContent = fs.readFileSync(config.typesOutPath!, 'utf-8');
-    expect(typesContent).toContain('TranslationKey');
+    expect(typesContent).toContain('I18nNestedKeys');
   });
 });
 

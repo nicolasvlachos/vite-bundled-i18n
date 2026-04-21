@@ -14,7 +14,7 @@ npm run build
 npm pack
 
 # in your app
-npm install /absolute/path/to/vite-bundled-i18n-0.1.0.tgz
+npm install /absolute/path/to/vite-bundled-i18n-<version>.tgz
 ```
 
 ## Demo App In This Repo
