@@ -33,7 +33,7 @@ function resolveConfig(config: CliConfig) {
   const rootDir = config.rootDir ?? process.cwd();
   const outDir = config.outDir ?? path.join(rootDir, '.i18n');
   const typesOutPath =
-    config.typesOutPath ?? path.join(rootDir, 'src', 'core', 'i18n-generated.ts');
+    config.typesOutPath ?? path.join(outDir, 'i18n-generated.ts');
   const localesDir = path.isAbsolute(config.localesDir)
     ? config.localesDir
     : path.join(rootDir, config.localesDir);

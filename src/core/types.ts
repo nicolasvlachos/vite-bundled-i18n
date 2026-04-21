@@ -3,7 +3,7 @@ import type {
   I18nNestedKeys,
   I18nParamsMap,
   I18nScopeMap,
-} from './i18n-generated';
+} from 'vite-bundled-i18n/generated';
 
 export type {
   I18nNestedKeys,
@@ -119,10 +119,10 @@ export type ParamsOf<K extends TranslationKey> =
  * Params are type-checked per key: `t('cart.total', { amount: 9 })` enforces `{ amount }`.
  */
 export type TFunction = {
-  <K extends keyof I18nParamsMap>(key: K, params: I18nParamsMap[K]): string;
-  <K extends keyof I18nParamsMap>(key: K, params: I18nParamsMap[K], fallback: string): string;
   (key: TranslationKey): string;
   (key: TranslationKey, fallback: string): string;
+  (key: TranslationKey, params: Record<string, unknown>): string;
+  (key: TranslationKey, params: Record<string, unknown>, fallback: string): string;
 };
 
 /**
@@ -145,8 +145,8 @@ export type ScopedTFunction = {
  * and does not degrade to key-as-value.
  */
 export type TryTFunction = {
-  <K extends keyof I18nParamsMap>(key: K, params: I18nParamsMap[K]): string | undefined;
   (key: TranslationKey): string | undefined;
+  (key: TranslationKey, params: Record<string, unknown>): string | undefined;
 };
 
 /**
@@ -163,8 +163,8 @@ export type ScopedTryTFunction = {
  * Like {@link TryTFunction}, this function does not accept fallback strings.
  */
 export type RequireTFunction = {
-  <K extends keyof I18nParamsMap>(key: K, params: I18nParamsMap[K]): string;
   (key: TranslationKey): string;
+  (key: TranslationKey, params: Record<string, unknown>): string;
 };
 
 /**

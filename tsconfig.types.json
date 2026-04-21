@@ -9,6 +9,9 @@
     "moduleDetection": "force",
     "jsx": "react-jsx",
     "skipLibCheck": true,
+    "paths": {
+      "vite-bundled-i18n/generated": ["./src/core/i18n-generated.ts"]
+    },
     "declaration": true,
     "emitDeclarationOnly": true,
     "rootDir": "./src",

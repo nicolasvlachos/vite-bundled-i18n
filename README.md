@@ -70,13 +70,24 @@ export default defineConfig({
       locales: ['en', 'bg'],
       defaultLocale: 'en',
       generatedOutDir: '.i18n',
-      // types are generated to src/core/i18n-generated.ts by default
+      // types are generated to .i18n/i18n-generated.ts by default
     }),
   ],
 })
 ```
 
-Types are generated automatically on `npm run dev` (on server start and when locale files change) and during `npm run build`. No manual step needed.
+Types are generated automatically on `npm run dev` (on server start and when locale files change) and during `npm run build`. To enable autocomplete and type validation, add to your `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "paths": {
+      "vite-bundled-i18n/generated": ["./.i18n/i18n-generated.ts"]
+    }
+  },
+  "include": ["src", ".i18n"]
+}
+```
 
 ### React
 

@@ -13,6 +13,14 @@ const entries = {
 
 export default defineConfig({
   publicDir: false,
+  esbuild: {
+    jsx: 'automatic',
+  },
+  resolve: {
+    alias: {
+      'vite-bundled-i18n/generated': path.resolve(__dirname, 'src/core/i18n-generated.ts'),
+    },
+  },
   build: {
     emptyOutDir: true,
     lib: {
@@ -27,6 +35,8 @@ export default defineConfig({
       external: [
         'react',
         'react-dom',
+        'react/jsx-runtime',
+        'react/jsx-dev-runtime',
         'vue',
         'vite',
         'typescript',

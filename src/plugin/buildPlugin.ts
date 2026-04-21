@@ -58,7 +58,7 @@ function resolveBuildPaths(options: EmitI18nBuildArtifactsOptions) {
     : path.join(rootDir, '.i18n');
   const typesOutPath = buildConfig.typesOutPath
     ? path.resolve(rootDir, buildConfig.typesOutPath)
-    : path.join(rootDir, 'src', 'core', 'i18n-generated.ts');
+    : path.join(generatedOutDir, 'i18n-generated.ts');
   const assetsOutDir = path.join(viteOutDir, buildConfig.assetsDir ?? '__i18n');
   const extractionScope = buildConfig.extractionScope ?? 'global';
 

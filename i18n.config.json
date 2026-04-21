@@ -4,5 +4,6 @@
   "locales": ["en", "bg"],
   "defaultLocale": "en",
   "outDir": ".i18n",
+  "typesOutPath": "src/core/i18n-generated.ts",
   "extractionScope": "global"
 }

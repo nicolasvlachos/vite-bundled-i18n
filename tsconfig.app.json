@@ -7,9 +7,10 @@
     "types": ["vite/client"],
     "skipLibCheck": true,
 
-    /* Resolve package name for module augmentation (.i18n/i18n.d.ts) — only needed in this repo */
+    /* Resolve package subpaths — only needed in this repo (consumers get it from node_modules) */
     "paths": {
       "vite-bundled-i18n": ["./src/index.ts"],
+      "vite-bundled-i18n/generated": ["./src/core/i18n-generated.ts"],
       "vite-bundled-i18n/*": ["./src/*.ts"]
     },
 
