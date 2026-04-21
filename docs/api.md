@@ -274,9 +274,34 @@ export const nav = defineI18nData([
 
 ## React
 
-### `<I18nProvider instance={i18n}>`
+### `<I18nProvider>`
 
-Registers the instance globally, loads dictionaries, and re-renders on locale change.
+Registers the instance globally, loads dictionaries, and re-renders on locale change. **Blocks rendering until dictionaries are loaded** — children only render once shared translations are available.
+
+```tsx
+<I18nProvider instance={i18n} fallback={<Spinner />}>
+  <App />
+</I18nProvider>
+```
+
+Props:
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `instance` | `I18nInstance` | required | The instance from `createI18n()` |
+| `children` | `ReactNode` | required | App content |
+| `fallback` | `ReactNode` | `null` | Shown while dictionaries load. `null` = blank screen. |
+| `serverResources` | `Record<string, NestedTranslations>` | — | SSR pre-loaded translations (skips dictionary fetch) |
+| `preloadScopes` | `string[]` | — | Scopes to eagerly fetch alongside dictionaries |
+| `eager` | `boolean` | `false` | Render children before dictionaries are ready |
+
+**Loading phases:**
+
+1. **App init** — Provider loads all dictionaries. Children are blocked until ready (or `eager` is set). Layout, nav, breadcrumbs using `shared.*` keys are guaranteed to have translations.
+2. **Page navigation** — Provider persists. `useI18n(scope)` in page components loads scope bundles. Only the page content waits (via `ready` or `I18nBoundary`). Dictionaries are always available.
+3. **Locale switch** — `changeLocale('bg')` awaits all refetches internally, then notifies. No flash — new locale data is loaded before consumers re-render.
+
+**Cache-aware:** On remount (Next.js Pages Router), the provider detects cached dictionary data in the instance store and renders immediately — no refetch, no flash.
 
 ### `useI18n(scope?)`
 

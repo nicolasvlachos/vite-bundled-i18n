@@ -182,11 +182,13 @@ import { i18n } from './i18n'
 import App from './App'
 
 createRoot(document.getElementById('root')!).render(
-  <I18nProvider instance={i18n}>
+  <I18nProvider instance={i18n} fallback={<div>Loading translations...</div>}>
     <App />
   </I18nProvider>,
 )
 ```
+
+The provider blocks rendering until dictionaries are loaded. The `fallback` prop controls what shows during loading (`null` for blank screen, or a spinner component). Once loaded, children render and dictionaries are always available to all components.
 
 ## 6. React usage
 
@@ -479,7 +481,7 @@ const html = renderToString(<App translations={translations} />)
 Client (React):
 
 ```tsx
-<I18nProvider instance={i18n}>
+<I18nProvider instance={i18n} fallback={null}>
   <App />
 </I18nProvider>
 ```

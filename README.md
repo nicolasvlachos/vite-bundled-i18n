@@ -98,8 +98,10 @@ import { I18nProvider } from 'vite-bundled-i18n/react'
 import { i18n } from './i18n'
 import App from './App'
 
+// Provider blocks rendering until dictionaries are loaded.
+// fallback is shown during loading (null = blank screen).
 createRoot(document.getElementById('root')!).render(
-  <I18nProvider instance={i18n}>
+  <I18nProvider instance={i18n} fallback={<div>Loading...</div>}>
     <App />
   </I18nProvider>,
 )
@@ -124,14 +126,24 @@ export function ProductsPage() {
 }
 ```
 
-Use `I18nBoundary` to avoid rules-of-hooks violations from early returns:
+Use `I18nBoundary` to handle per-page scope loading without early returns:
 
 ```tsx
 import { I18nBoundary } from 'vite-bundled-i18n/react'
 
-<I18nBoundary scope="products.index" fallback={<Spinner />}>
+<I18nBoundary scope="products.index" fallback={<Skeleton />}>
   <ProductsPage />
 </I18nBoundary>
+```
+
+**Navigation lifecycle:** The provider persists across page navigations (Inertia, React Router, Next.js App Router). Dictionaries load once on init. Each page's scope loads on mount via `useI18n(scope)` — only the page content waits, not the layout. Previously visited pages are instant (scope is cached).
+
+For small apps, preload all scopes upfront:
+
+```tsx
+<I18nProvider instance={i18n} fallback={<Spinner />} preloadScopes={['products.index', 'cart', 'account']}>
+  <App />
+</I18nProvider>
 ```
 
 ### Vue

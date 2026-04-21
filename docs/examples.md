@@ -92,7 +92,7 @@ import { createI18n } from 'vite-bundled-i18n'
 
 const i18n = createI18n({ ... })
 
-<I18nProvider instance={i18n}>
+<I18nProvider instance={i18n} fallback={null}>
   <App />
 </I18nProvider>
 ```

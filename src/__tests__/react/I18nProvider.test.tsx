@@ -113,7 +113,6 @@ describe('I18nProvider', () => {
   });
 
   it('still loads dictionaries when serverResources is not provided', () => {
-    // This is the existing behavior test — make sure it still works
     const plainInstance = createI18n({
       locale: 'en',
       defaultLocale: 'en',
@@ -129,5 +128,266 @@ describe('I18nProvider', () => {
     );
 
     expect(screen.getByTestId('has-context').textContent).toBe('yes');
+  });
+
+  // --- Provider gating tests ---
+
+  it('1. gate blocks children and shows fallback during dictionary loading', async () => {
+    const { vi } = await import('vitest');
+    let resolveFetch!: (v: Response) => void;
+    globalThis.fetch = vi.fn().mockReturnValue(
+      new Promise<Response>(resolve => { resolveFetch = resolve; })
+    );
+
+    const gatedInstance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+      dictionaries: { global: { include: ['shared.*'], priority: 1 } },
+    });
+
+    render(
+      <I18nProvider instance={gatedInstance} fallback={<div data-testid="loading">LOADING</div>}>
+        <span data-testid="child">CHILD</span>
+      </I18nProvider>,
+    );
+
+    // Children must NOT render — fallback must show
+    expect(screen.queryByTestId('child')).toBeNull();
+    expect(screen.getByTestId('loading').textContent).toBe('LOADING');
+
+    // Resolve the dictionary fetch
+    resolveFetch(new Response(JSON.stringify({ shared: { ok: 'OK' } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    // Wait for state update
+    await screen.findByTestId('child');
+    expect(screen.getByTestId('child').textContent).toBe('CHILD');
+    expect(screen.queryByTestId('loading')).toBeNull();
+
+    globalThis.fetch = vi.fn();
+  });
+
+  it('2. provider remount with cached data renders immediately (no flash)', async () => {
+    const { vi } = await import('vitest');
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ shared: { ok: 'OK' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    const persistentInstance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+      dictionaries: { global: { include: ['shared.*'], priority: 1 } },
+    });
+
+    // First mount — loads dictionaries
+    const { unmount } = render(
+      <I18nProvider instance={persistentInstance} fallback={<div>LOADING</div>}>
+        <span data-testid="child">CHILD</span>
+      </I18nProvider>,
+    );
+    await screen.findByTestId('child');
+    unmount();
+
+    // Second mount — data is cached, should render immediately
+    render(
+      <I18nProvider instance={persistentInstance} fallback={<div data-testid="loading2">LOADING</div>}>
+        <span data-testid="child2">CHILD2</span>
+      </I18nProvider>,
+    );
+
+    // Must be immediate — no fallback
+    expect(screen.getByTestId('child2').textContent).toBe('CHILD2');
+    expect(screen.queryByTestId('loading2')).toBeNull();
+
+    globalThis.fetch = vi.fn();
+  });
+
+  it('3. preloadScopes makes scope available immediately on navigation', async () => {
+    const { vi } = await import('vitest');
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ quizzes: { index: { title: 'Quizzes' } } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    const preloadInstance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+    });
+
+    render(
+      <I18nProvider instance={preloadInstance} preloadScopes={['quizzes.index']}>
+        <span data-testid="child">OK</span>
+      </I18nProvider>,
+    );
+
+    await screen.findByTestId('child');
+
+    // Scope should now be cached
+    expect(preloadInstance.isScopeLoaded('en', 'quizzes.index')).toBe(true);
+
+    globalThis.fetch = vi.fn();
+  });
+
+  it('4. changeLocale loads new data before notifying (no flash)', async () => {
+    const { vi } = await import('vitest');
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ shared: { ok: 'OK' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    const localeInstance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en', 'bg'],
+      localesDir: '/locales',
+      dictionaries: { global: { include: ['shared.*'], priority: 1 } },
+    });
+
+    function Consumer() {
+      const ctx = useContext(I18nContext);
+      return <span data-testid="locale">{ctx?.instance.getLocale()}</span>;
+    }
+
+    render(
+      <I18nProvider instance={localeInstance} fallback={<div>LOADING</div>}>
+        <Consumer />
+      </I18nProvider>,
+    );
+
+    await screen.findByTestId('locale');
+
+    // Switch locale — changeLocale awaits all refetches before notifying
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ shared: { ok: 'Добре' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await localeInstance.changeLocale('bg');
+
+    // By the time onLocaleChange fires, BG data is already loaded
+    expect(localeInstance.translate('bg', 'shared.ok')).toBe('Добре');
+
+    globalThis.fetch = vi.fn();
+  });
+
+  it('5. eager: true renders children immediately during loading', async () => {
+    const { vi } = await import('vitest');
+    globalThis.fetch = vi.fn().mockReturnValue(new Promise(() => {})); // never resolves
+
+    const eagerInstance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+      dictionaries: { global: { include: ['shared.*'], priority: 1 } },
+    });
+
+    render(
+      <I18nProvider instance={eagerInstance} eager fallback={<div data-testid="fb">FB</div>}>
+        <span data-testid="eager-child">EAGER</span>
+      </I18nProvider>,
+    );
+
+    // Children render immediately — fallback is NOT shown
+    expect(screen.getByTestId('eager-child').textContent).toBe('EAGER');
+    expect(screen.queryByTestId('fb')).toBeNull();
+
+    globalThis.fetch = vi.fn();
+  });
+
+  it('6. no double-fetch on remount with cached data', async () => {
+    const { vi } = await import('vitest');
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ shared: { ok: 'OK' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    globalThis.fetch = fetchMock;
+
+    const cacheInstance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+      dictionaries: { global: { include: ['shared.*'], priority: 1 } },
+    });
+
+    // First mount
+    const { unmount } = render(
+      <I18nProvider instance={cacheInstance} fallback={<div>L</div>}>
+        <span>C</span>
+      </I18nProvider>,
+    );
+    await screen.findByText('C');
+    const fetchCountAfterFirst = fetchMock.mock.calls.length;
+    unmount();
+
+    // Second mount — should NOT fetch again
+    render(
+      <I18nProvider instance={cacheInstance} fallback={<div>L</div>}>
+        <span>C2</span>
+      </I18nProvider>,
+    );
+    expect(screen.getByText('C2')).toBeDefined();
+    expect(fetchMock.mock.calls.length).toBe(fetchCountAfterFirst);
+
+    globalThis.fetch = vi.fn();
+  });
+
+  it('7. fallback=null, fallback=undefined, and no fallback all render nothing during loading', async () => {
+    const { vi } = await import('vitest');
+    globalThis.fetch = vi.fn().mockReturnValue(new Promise(() => {})); // never resolves
+
+    const mkInstance = () => createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+      dictionaries: { global: { include: ['shared.*'], priority: 1 } },
+    });
+
+    // fallback={null}
+    const { container: c1 } = render(
+      <I18nProvider instance={mkInstance()} fallback={null}>
+        <span>SHOULD NOT SHOW</span>
+      </I18nProvider>,
+    );
+    expect(c1.innerHTML).toBe('');
+
+    // fallback={undefined}
+    const { container: c2 } = render(
+      <I18nProvider instance={mkInstance()} fallback={undefined}>
+        <span>SHOULD NOT SHOW</span>
+      </I18nProvider>,
+    );
+    expect(c2.innerHTML).toBe('');
+
+    // no fallback prop
+    const { container: c3 } = render(
+      <I18nProvider instance={mkInstance()}>
+        <span>SHOULD NOT SHOW</span>
+      </I18nProvider>,
+    );
+    expect(c3.innerHTML).toBe('');
+
+    globalThis.fetch = vi.fn();
   });
 });
