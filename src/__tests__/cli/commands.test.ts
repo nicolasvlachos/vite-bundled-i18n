@@ -98,6 +98,8 @@ describe('generate', () => {
     expect(fs.existsSync(config.typesOutPath!)).toBe(true);
     const typesContent = fs.readFileSync(config.typesOutPath!, 'utf-8');
     expect(typesContent).toContain('I18nNestedKeys');
+    expect(typesContent).toContain(`'products.index': true;`);
+    expect(typesContent).not.toContain(`'ProductsPage': true;`);
   });
 });
 

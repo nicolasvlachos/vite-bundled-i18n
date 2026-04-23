@@ -197,5 +197,7 @@ export interface I18nParamsMap {
 }
 
 export interface I18nScopeMap {
-    // No scopes found
+    'account': true;
+    'cart': true;
+    'products.index': true;
 }

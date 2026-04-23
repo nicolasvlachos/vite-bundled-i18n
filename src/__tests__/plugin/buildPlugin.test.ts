@@ -63,6 +63,7 @@ describe('i18nBuildPlugin config hook', () => {
     );
     const configHook = plugin.config as (config: UserConfig) => UserConfig;
     const result = configHook({});
+    expect(result.define).toHaveProperty('__VITE_I18N_DEV__', JSON.stringify(false));
     expect(result.define).toHaveProperty('__VITE_I18N_BASE__', JSON.stringify('/__i18n'));
   });
 
@@ -130,6 +131,13 @@ describe('emitI18nBuildArtifacts', () => {
     expect(routeBundle).toEqual({
       products: { index: { heading: 'All Products' } },
     });
+
+    const generatedTypes = fs.readFileSync(
+      path.join(tmpDir, 'src', 'core', 'i18n-generated.ts'),
+      'utf-8',
+    );
+    expect(generatedTypes).toContain(`'products.index': true;`);
+    expect(generatedTypes).not.toContain(`'ProductsPage': true;`);
   });
 
   it('returns warnings when extracted keys exist but no keys match translations', () => {

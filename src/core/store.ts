@@ -19,12 +19,34 @@ interface StoreStats {
   pinnedNamespaces: number;
 }
 
+function isNestedObject(value: string | NestedTranslations): value is NestedTranslations {
+  return typeof value === 'object' && value !== null;
+}
+
+function mergeTranslations(
+  existing: NestedTranslations,
+  incoming: NestedTranslations,
+): NestedTranslations {
+  const merged: NestedTranslations = { ...existing };
+
+  for (const [key, value] of Object.entries(incoming)) {
+    const current = merged[key];
+    if (current !== undefined && isNestedObject(current) && isNestedObject(value)) {
+      merged[key] = mergeTranslations(current, value);
+      continue;
+    }
+    merged[key] = value;
+  }
+
+  return merged;
+}
+
 /**
  * The resource store's public interface.
  * Manages an in-memory map of `locale → namespace → translations`.
  */
 export interface ResourceStore {
-  /** Stores translation data for a locale and namespace. Overwrites if already present. */
+  /** Stores translation data for a locale and namespace. Deep merges if already present. */
   addResources: (
     locale: string,
     namespace: string,
@@ -78,14 +100,19 @@ export function createStore(): ResourceStore {
         localeMap = new Map();
         data.set(locale, localeMap);
       }
+      const existing = localeMap.get(namespace);
+      const merged = existing
+        ? mergeTranslations(existing.data, resources)
+        : resources;
+
       localeMap.set(namespace, {
         locale,
         namespace,
-        data: resources,
-        source: options?.source ?? 'manual',
-        pinned: options?.pinned ?? false,
+        data: merged,
+        source: options?.source ?? existing?.source ?? 'manual',
+        pinned: (options?.pinned ?? false) || existing?.pinned === true,
         lastAccessedAt: now(),
-        approxSize: approxSizeOf(resources),
+        approxSize: approxSizeOf(merged),
       });
     },
 

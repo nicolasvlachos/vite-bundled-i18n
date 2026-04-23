@@ -73,6 +73,17 @@ function createNamespacedTranslations(
   };
 }
 
+/**
+ * Creates a translator object bound to a specific instance and locale.
+ *
+ * Used internally by `useI18n` (React), `useI18n` (Vue), and `getTranslations`.
+ * The returned object provides `t`, `get`, `has`, `tryGet`, `require`,
+ * `namespace`, and `forLocale` methods.
+ *
+ * @param instance - The i18n runtime instance.
+ * @param locale - The locale to bind the translator to.
+ * @returns A {@link Translations} object.
+ */
 export function createTranslations(
   instance: I18nInstance,
   locale: string,

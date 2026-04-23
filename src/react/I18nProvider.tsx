@@ -16,6 +16,10 @@ export interface I18nProviderProps {
    * resources to the store immediately and skips dictionary fetching.
    */
   serverResources?: Record<string, NestedTranslations>;
+  /** Scope ids that were already loaded on the server. */
+  serverScopes?: string[];
+  /** Dictionary names that were already loaded on the server. */
+  serverDictionaries?: string[];
   /**
    * Rendered while dictionaries are loading on init. Default: renders children
    * immediately (dictionaries load in background).
@@ -65,6 +69,8 @@ interface WindowWithI18n extends Window {
   __I18N_RESOURCES__?: {
     locale: string;
     resources: Record<string, NestedTranslations>;
+    scopes?: string[];
+    dictionaries?: string[];
   };
 }
 
@@ -72,26 +78,46 @@ export function I18nProvider({
   instance,
   children,
   serverResources,
+  serverScopes,
+  serverDictionaries,
   fallback,
   preloadScopes,
   eager = false,
 }: I18nProviderProps) {
+  function applyHydratedState(
+    locale: string,
+    resources: Record<string, NestedTranslations>,
+    scopes?: string[],
+    dictionaries?: string[],
+  ): void {
+    for (const [namespace, data] of Object.entries(resources)) {
+      instance.addResources(locale, namespace, data);
+    }
+    for (const scope of scopes ?? []) {
+      instance.markScopeLoaded(locale, scope);
+    }
+    for (const dictionary of dictionaries ?? []) {
+      instance.markDictionaryLoaded(locale, dictionary);
+    }
+  }
+
   // Hydrate from SSR data synchronously (before first render)
   const [hydrated] = useState(() => {
     if (serverResources) {
       const locale = instance.getLocale();
-      for (const [namespace, data] of Object.entries(serverResources)) {
-        instance.addResources(locale, namespace, data);
-      }
+      applyHydratedState(locale, serverResources, serverScopes, serverDictionaries);
       return true;
     }
 
     const win = typeof window !== 'undefined' ? (window as WindowWithI18n) : undefined;
     if (win?.__I18N_RESOURCES__) {
       const serverData = win.__I18N_RESOURCES__;
-      for (const [namespace, data] of Object.entries(serverData.resources)) {
-        instance.addResources(serverData.locale, namespace, data);
-      }
+      applyHydratedState(
+        serverData.locale,
+        serverData.resources,
+        serverData.scopes,
+        serverData.dictionaries,
+      );
       delete win.__I18N_RESOURCES__;
       return true;
     }
@@ -101,14 +127,7 @@ export function I18nProvider({
 
   // Track whether dictionaries have been loaded (Phase 1)
   const [dictsReady, setDictsReady] = useState(() => {
-    if (hydrated) return true;
-    // No dictionaries configured → ready immediately
-    const dictNames = instance.getDictionaryNames();
-    if (dictNames.length === 0) return true;
-    // All dictionary namespaces already in cache (e.g. added via addResources) → ready
-    const locale = instance.getLocale();
-    const dictNs = instance.getDictionaryNamespaces();
-    return dictNs.length > 0 && dictNs.every(ns => instance.isNamespaceLoaded(locale, ns));
+    return areDictionariesReady(instance);
   });
 
   const [version, setVersion] = useState(hydrated ? 1 : 0);
@@ -116,15 +135,20 @@ export function I18nProvider({
   useEffect(() => {
     setGlobalInstance(instance);
 
-    const unsub = instance.onLocaleChange(() => {
+    const unsubLocale = instance.onLocaleChange(() => {
+      setDictsReady(areDictionariesReady(instance));
+      setVersion((v) => v + 1);
+    });
+    const unsubResources = instance.onResourcesChange(() => {
+      setDictsReady(areDictionariesReady(instance));
       setVersion((v) => v + 1);
     });
 
     const locale = instance.getLocale();
     const promises: Promise<void>[] = [];
 
-    // Phase 1: Load dictionaries (if not hydrated and not already cached)
-    if (!hydrated && !dictsReady) {
+    // Phase 1: Load dictionaries when they're not already available.
+    if (!dictsReady) {
       if (instance.getDictionaryNames().length > 0) {
         promises.push(instance.loadAllDictionaries(locale));
       }
@@ -141,17 +165,20 @@ export function I18nProvider({
 
     if (promises.length > 0) {
       Promise.all(promises).then(() => {
-        setDictsReady(true);
+        setDictsReady(areDictionariesReady(instance));
         setVersion((v) => v + 1);
       });
     }
 
-    return unsub;
-  }, [instance, hydrated, preloadScopes]);
+    return () => {
+      unsubLocale();
+      unsubResources();
+    };
+  }, [dictsReady, instance, preloadScopes]);
 
   const contextValue = useMemo(
-    () => ({ instance, version }),
-    [instance, version],
+    () => ({ instance, version, dictsReady }),
+    [dictsReady, instance, version],
   );
 
   // Gate rendering until dictionaries are ready (unless eager mode)
@@ -159,7 +186,22 @@ export function I18nProvider({
 
   return (
     <I18nContext.Provider value={contextValue}>
-      {showChildren ? children : (fallback ?? null)}
+      <>{showChildren ? children : fallback}</>
     </I18nContext.Provider>
   );
+}
+
+function areDictionariesReady(instance: I18nInstance): boolean {
+  const dictNames = instance.getDictionaryNames();
+  if (dictNames.length === 0) return true;
+
+  const locale = instance.getLocale();
+  const loadedDictionaries = instance.getLoadedDictionaries(locale);
+  if (dictNames.every((name) => loadedDictionaries.includes(name))) {
+    return true;
+  }
+
+  const dictionaryNamespaces = instance.getDictionaryNamespaces();
+  return dictionaryNamespaces.length > 0
+    && dictionaryNamespaces.every((namespace) => instance.isNamespaceLoaded(locale, namespace));
 }

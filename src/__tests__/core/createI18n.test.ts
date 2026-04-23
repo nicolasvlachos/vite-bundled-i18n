@@ -23,6 +23,7 @@ describe('createI18n', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    delete (globalThis as typeof globalThis & { __VITE_I18N_DEV__?: boolean }).__VITE_I18N_DEV__;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -146,6 +147,26 @@ describe('createI18n', () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
+  it('notifies subscribers when resources change', async () => {
+    const instance = createI18n(baseConfig);
+    const callback = vi.fn();
+    const unsub = instance.onResourcesChange(callback);
+
+    instance.addResources('en', 'shared', { ok: 'OK' });
+    expect(callback).toHaveBeenCalledTimes(1);
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ products: { show: { title: 'Details' } } }),
+    } as Response);
+    await instance.loadScope('en', 'products.show');
+    expect(callback).toHaveBeenCalledTimes(2);
+
+    unsub();
+    instance.addResources('en', 'other', { title: 'Ignored' });
+    expect(callback).toHaveBeenCalledTimes(2);
+  });
+
   it('loads named dictionaries and scopes when changing locale', async () => {
     const instance = createI18n({
       ...baseConfig,
@@ -205,6 +226,121 @@ describe('createI18n', () => {
 
     expect(instance.isScopeLoaded('en', 'products.show')).toBe(true);
     expect(instance.isNamespaceLoaded('en', 'products')).toBe(true);
+  });
+
+  it('preserves existing namespace keys when multiple scopes load into the same namespace', async () => {
+    const instance = createI18n(baseConfig);
+
+    vi.mocked(globalThis.fetch).mockImplementation((url) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/quizzes.index')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ quizzes: { index: { title: 'Quizzes' } } }),
+        } as Response);
+      }
+      if (urlStr.includes('/quizzes.categories.index')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ quizzes: { categories: { index: { title: 'Categories' } } } }),
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+    });
+
+    await instance.loadScope('en', 'quizzes.index');
+    await instance.loadScope('en', 'quizzes.categories.index');
+
+    expect(instance.isScopeLoaded('en', 'quizzes.index')).toBe(true);
+    expect(instance.isScopeLoaded('en', 'quizzes.categories.index')).toBe(true);
+    expect(instance.translate('en', 'quizzes.index.title')).toBe('Quizzes');
+    expect(instance.translate('en', 'quizzes.categories.index.title')).toBe('Categories');
+  });
+
+  it('does not trust a scope marker when the scope data is missing', async () => {
+    const instance = createI18n(baseConfig);
+
+    instance.markScopeLoaded('en', 'quizzes.index');
+    expect(instance.isScopeLoaded('en', 'quizzes.index')).toBe(false);
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ quizzes: { index: { title: 'Quizzes' } } }),
+    } as Response);
+
+    await instance.loadScope('en', 'quizzes.index');
+
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith('/__i18n/en/quizzes.index.json');
+    expect(instance.isScopeLoaded('en', 'quizzes.index')).toBe(true);
+    expect(instance.translate('en', 'quizzes.index.title')).toBe('Quizzes');
+  });
+
+  it('treats fetched empty scope bundles as loaded', async () => {
+    const instance = createI18n(baseConfig);
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({}),
+    } as Response);
+
+    await instance.loadScope('en', 'feedback');
+
+    expect(instance.isScopeLoaded('en', 'feedback')).toBe(true);
+    expect(instance.getResource('en', 'feedback')).toBeUndefined();
+  });
+
+  it('deduplicates concurrent scope loads for the same locale and scope', async () => {
+    let resolveFetch!: (response: Response) => void;
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    globalThis.fetch = fetchMock;
+
+    const instance = createI18n(baseConfig);
+
+    const first = instance.loadScope('en', 'products.show');
+    const second = instance.loadScope('en', 'products.show');
+
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    resolveFetch({
+      ok: true,
+      json: () => Promise.resolve({ products: { show: { title: 'Details' } } }),
+    } as Response);
+
+    await Promise.all([first, second]);
+
+    expect(instance.isScopeLoaded('en', 'products.show')).toBe(true);
+    expect(instance.translate('en', 'products.show.title')).toBe('Details');
+  });
+
+  it('uses namespace-backed scope bundles in dev mode and reuses loaded namespaces across scopes', async () => {
+    (globalThis as typeof globalThis & { __VITE_I18N_DEV__?: boolean }).__VITE_I18N_DEV__ = true;
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        products: {
+          index: { heading: 'All Products' },
+          show: { title: 'Details' },
+        },
+      }),
+    } as Response);
+
+    const instance = createI18n(baseConfig);
+
+    await instance.loadScope('en', 'products.show');
+
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith('/__i18n/en/_scope/products.json');
+    expect(instance.isScopeLoaded('en', 'products.index')).toBe(true);
+
+    await instance.loadScope('en', 'products.index');
+
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(1);
+    expect(instance.translate('en', 'products.index.heading')).toBe('All Products');
   });
 
   it('tracks key usage for dev diagnostics', () => {
@@ -291,6 +427,37 @@ describe('createI18n', () => {
     expect(instance.translate('bg', 'products.show.title')).toBe('Детайли');
     expect(instance.translate('bg', 'shared.loading')).toBe('Loading...');
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('skips compiled runtime auto mode in dev and loads JSON bundles directly', async () => {
+    (globalThis as typeof globalThis & { __VITE_I18N_DEV__?: boolean }).__VITE_I18N_DEV__ = true;
+
+    const loadManifest = vi.fn(async () => ({
+      scopes: {},
+      dictionaries: {},
+    }));
+
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ shared: { ok: 'OK' } }),
+    } as Response);
+
+    const instance = createI18n({
+      ...baseConfig,
+      dictionaries: {
+        global: { keys: ['shared'] },
+      },
+      compiled: {
+        enabled: 'auto',
+        loadManifest,
+      },
+    });
+
+    await instance.loadDictionary('en', 'global');
+
+    expect(loadManifest).not.toHaveBeenCalled();
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith('/__i18n/en/_dict/global.json');
+    expect(instance.translate('en', 'shared.ok')).toBe('OK');
   });
 
   it('passes requestInit to namespace loading', async () => {

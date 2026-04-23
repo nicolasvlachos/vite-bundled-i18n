@@ -1,8 +1,8 @@
 {
   "name": "vite-bundled-i18n",
   "private": false,
-  "version": "0.2.15",
-  "description": "Route-aware i18n for Vite apps with typed keys, scope bundles, dictionary ownership, and compiled production output.",
+  "version": "0.3.0",
+  "description": "Route-aware i18n bundler for Vite. Translations are AST-extracted, tree-shaken per page, and shipped as scope-matched bundles — not loaded globally.",
   "type": "module",
   "types": "./dist/index.d.ts",
   "license": "MIT",
@@ -74,11 +74,9 @@
     }
   },
   "scripts": {
-    "dev": "vite",
     "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.types.json && node scripts/postbuild-lib.mjs",
-    "build": "npm run build:lib && vite build",
+    "build": "npm run build:lib",
     "lint": "eslint .",
-    "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "i18n": "tsx src/cli/index.ts",

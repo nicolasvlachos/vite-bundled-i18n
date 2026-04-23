@@ -38,6 +38,20 @@ describe('createStore', () => {
       store.addResources('en', 'shared', { ok: 'Okay' });
       expect(store.getResource('en', 'shared')).toEqual({ ok: 'Okay' });
     });
+
+    it('deep merges nested translations for the same locale and namespace', () => {
+      store.addResources('en', 'quizzes', {
+        index: { title: 'Quizzes' },
+      });
+      store.addResources('en', 'quizzes', {
+        categories: { index: { title: 'Categories' } },
+      });
+
+      expect(store.getResource('en', 'quizzes')).toEqual({
+        index: { title: 'Quizzes' },
+        categories: { index: { title: 'Categories' } },
+      });
+    });
   });
 
   describe('getResource', () => {

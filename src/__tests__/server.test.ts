@@ -67,6 +67,36 @@ describe('initServerI18n', () => {
     const parsed = JSON.parse(jsonStr);
     expect(parsed.locale).toBe('en');
     expect(parsed.resources.shared.ok).toBe('OK');
+    expect(parsed.dictionaries).toEqual(['global']);
+  });
+
+  it('serializes hydrated scope metadata when a scope is provided', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((url) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/_dict/global')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ shared: { ok: 'OK' } }),
+        } as Response);
+      }
+      if (urlStr.includes('/products.show.json')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ products: { show: { title: 'Details' } } }),
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+    });
+
+    const { scriptTag } = await initServerI18n(baseConfig, 'products.show');
+    const jsonStr = scriptTag
+      .replace('<script>window.__I18N_RESOURCES__=', '')
+      .replace('</script>', '')
+      .replace(/\\u003c/g, '<');
+    const parsed = JSON.parse(jsonStr);
+
+    expect(parsed.scopes).toEqual(['products.show']);
+    expect(parsed.dictionaries).toEqual(['global']);
   });
 
   it('scriptTag escapes angle brackets for XSS safety', async () => {

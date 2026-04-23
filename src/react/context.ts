@@ -10,6 +10,7 @@ import type { I18nInstance } from '../core/types';
 export interface I18nContextValue {
   instance: I18nInstance;
   version: number;
+  dictsReady: boolean;
 }
 
 /**

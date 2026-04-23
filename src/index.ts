@@ -15,6 +15,7 @@ export { getTranslations, createTranslations } from './core/getTranslations';
 export { defineI18nConfig } from './core/config';
 export { defineI18nData, i18nKey } from './core/data';
 export { t, hasKey, scopedT, setGlobalInstance, getGlobalTranslations } from './core/t';
+export { mountI18nDevtools } from './devtools/mountDevtools';
 export { initServerI18n } from './server';
 export type {
   I18nSharedConfig,
@@ -47,3 +48,7 @@ export type {
   ValidScope,
   DotPath,
 } from './core/types';
+export type {
+  I18nDevtoolsHandle,
+  I18nDevtoolsOptions,
+} from './devtools/mountDevtools';

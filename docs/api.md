@@ -124,6 +124,16 @@ compiled: {
 }
 ```
 
+### `instance.registerLoadingScope(scope)`
+
+Registers a scope as currently loading. Returns an unregister function that must be called when the scope finishes loading (or the component unmounts). Used internally by `useI18n()` — call it directly when building custom scope-loading logic outside of React/Vue.
+
+```ts
+const unregister = i18n.registerLoadingScope('products.index')
+// ...after scope loaded or component unmounted:
+unregister()
+```
+
 ### `instance.changeLocale(locale)`
 
 Switches the active locale. Automatically re-fetches all dictionaries and previously loaded scopes for the new locale, then notifies all consumers (React components re-render via context).
@@ -292,6 +302,8 @@ Props:
 | `children` | `ReactNode` | required | App content |
 | `fallback` | `ReactNode` | `null` | Shown while dictionaries load. `null` = blank screen. |
 | `serverResources` | `Record<string, NestedTranslations>` | — | SSR pre-loaded translations (skips dictionary fetch) |
+| `serverScopes` | `string[]` | — | Scope ids already hydrated on the server; marks `useI18n(scope)` ready on first render |
+| `serverDictionaries` | `string[]` | — | Dictionary names already hydrated on the server; marks them loaded without refetch |
 | `preloadScopes` | `string[]` | — | Scopes to eagerly fetch alongside dictionaries |
 | `eager` | `boolean` | `false` | Render children before dictionaries are ready |
 
@@ -324,6 +336,7 @@ const { t, translations, ready } = useI18n('products.show')
 ```
 
 `ready` matters when a requested scope still needs to load.
+It reflects both provider dictionary readiness and the requested scope state.
 
 ### `<I18nBoundary>`
 
@@ -423,21 +436,29 @@ Main instance methods:
 - `onLocaleChange(callback)`
 - `getKeyUsage()`
 - `getResource(locale, namespace)`
+- `getResidentKeyCount(locale)` — returns the total number of translation keys currently held in memory for the given locale across all loaded namespaces
+- `registerLoadingScope(scope)` — registers a scope as actively loading; returns an unregister callback. Used internally by framework adapters; call directly for custom loading logic.
 
 ## Vite Plugin
 
 Import from `vite-bundled-i18n/plugin`.
 
-### `i18nPlugin(sharedConfig, buildConfig?)`
+### `i18nPlugin(sharedConfig, options?)`
+
+```ts
+i18nPlugin(sharedConfig: I18nSharedConfig, options?: I18nPluginOptions): PluginOption[]
+```
 
 Unified dev + build plugin.
 
 Dev:
 
-- serves `__i18n/{locale}/_dict/{name}.json`
-- serves `__i18n/{locale}/{scope}.json`
+- serves `__i18n/{locale}/_dict/{name}.json` and `__i18n/{locale}/_scope/{namespace}.json` via Vite middleware
+- emits `vite-bundled-i18n:resources-updated` HMR events when locale files change
+- skips compiled auto-mode in dev so the runtime does not probe `compiled/manifest.js`
+- route diagnostics are computed lazily on demand (only when devtools requests them)
 
-Build config options:
+Plugin options:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -450,10 +471,26 @@ Build config options:
 | `emitTypes` | `boolean` | `true` | Generate TypeScript types |
 | `emitReports` | `boolean` | `true` | Generate analysis reports |
 | `emitCompiled` | `boolean` | `true` | Generate compiled JS modules |
+| `dev.emitPublicAssets` | `boolean` | `false` | Write translation bundles to `public/__i18n/` |
+| `dev.devBar` | `boolean` | `true` | Show devtools toggle and drawer in dev mode |
 
-### `i18nDevPlugin(sharedConfig)`
+### `i18nDevPlugin(sharedConfig, options?)`
 
 Dev-only plugin.
+
+By default, all translation bundles are served via Vite middleware. If your setup requires static files in the public directory (e.g. Laravel sidecar), pass `emitPublicAssets: true` in options. These emitted dev assets are temporary and should be ignored in app-level `.gitignore` (`public/__i18n/`).
+
+### `I18nDevtoolsOptions`
+
+Options accepted by `mountI18nDevtools()` and `<DevToolbar>`.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `mountTarget` | `HTMLElement` | DOM node to attach the devtools drawer to. Defaults to `document.body`. |
+| `getCurrentPath` | `() => string` | Returns the current URL path for the Page Footprint panel. Defaults to `() => location.pathname`. |
+| `getCurrentScope` | `() => string \| undefined` | Returns the active scope identifier for highlighting in the drawer. |
+
+The drawer reads all translation data directly from the runtime instance — no server round-trips are made.
 
 ### `i18nBuildPlugin(sharedConfig, buildConfig)`
 

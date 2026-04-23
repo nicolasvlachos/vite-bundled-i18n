@@ -5,6 +5,7 @@ import type {
   RuntimeCacheConfig,
 } from '../types';
 import { createStore, type ResourceStore } from '../store';
+import { inferNamespace } from '../resolver';
 
 // ---------------------------------------------------------------------------
 // Types / interfaces
@@ -242,12 +243,6 @@ function compositeKey(locale: string, id: string): string {
   return `${locale}${KEY_SEP}${id}`;
 }
 
-/** Extract the root namespace from a scope identifier. */
-function getScopeNamespace(scope: string): string {
-  const dot = scope.indexOf('.');
-  return dot === -1 ? scope : scope.slice(0, dot);
-}
-
 /** Extract the sub-key portion of a scope identifier, if any. */
 function getScopeSubkey(scope: string): string | undefined {
   const dot = scope.indexOf('.');
@@ -346,7 +341,7 @@ export function createCacheManager(
   // -- Scope data helpers ---------------------------------------------------
 
   function scopeHasStoredData(locale: string, scope: string): boolean {
-    const namespace = getScopeNamespace(scope);
+    const namespace = inferNamespace(scope);
     const resource = store.getResource(locale, namespace);
     if (!resource) return false;
 
@@ -364,7 +359,7 @@ export function createCacheManager(
       const scopeLocale = scopeKey.slice(0, sepIdx);
       const scope = scopeKey.slice(sepIdx + 1);
       if (scopeLocale !== locale) continue;
-      const scopeNs = getScopeNamespace(scope);
+      const scopeNs = inferNamespace(scope);
       if (scopeNs === namespace) {
         loadedScopes.delete(scopeKey);
         emptyLoadedScopes.delete(scopeKey);
@@ -418,7 +413,7 @@ export function createCacheManager(
     },
 
     isScopeLoaded(locale, scope) {
-      if (devNamespaceMode && store.hasNamespace(locale, getScopeNamespace(scope))) {
+      if (devNamespaceMode && store.hasNamespace(locale, inferNamespace(scope))) {
         return true;
       }
       const key = compositeKey(locale, scope);

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { useContext } from 'react';
 import { createI18n } from '../../core/createI18n';
 import { I18nProvider } from '../../react/I18nProvider';
@@ -36,6 +36,10 @@ describe('DevToolbar', () => {
     instance.addResources('en', 'shared', { ok: 'OK' });
   });
 
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
   it('renders the toggle button', () => {
     render(
       <I18nProvider instance={instance}>
@@ -56,13 +60,14 @@ describe('DevToolbar', () => {
     const btn = screen.getByTestId('i18n-toolbar-toggle');
     fireEvent.click(btn);
 
-    // Should show the panel with key information
-    const panel = screen.getByTestId('i18n-toolbar-panel');
-    expect(panel).toBeDefined();
-    expect(panel.textContent).toContain('shared.ok');
+    return waitFor(() => {
+      const panel = screen.getByTestId('i18n-toolbar-panel');
+      expect(panel).toBeDefined();
+      expect(panel.textContent).toContain('shared.ok');
+    });
   });
 
-  it('shows current locale', () => {
+  it('shows current locale', async () => {
     render(
       <I18nProvider instance={instance}>
         <TestApp />
@@ -70,10 +75,12 @@ describe('DevToolbar', () => {
     );
 
     fireEvent.click(screen.getByTestId('i18n-toolbar-toggle'));
-    expect(screen.getByTestId('i18n-toolbar-panel').textContent).toContain('en');
+    await waitFor(() => {
+      expect(screen.getByTestId('i18n-toolbar-panel').textContent).toContain('en');
+    });
   });
 
-  it('shows missing keys', () => {
+  it('shows missing keys', async () => {
     render(
       <I18nProvider instance={instance}>
         <TestApp />
@@ -81,12 +88,12 @@ describe('DevToolbar', () => {
     );
 
     fireEvent.click(screen.getByTestId('i18n-toolbar-toggle'));
-    const panel = screen.getByTestId('i18n-toolbar-panel');
+    const panel = await screen.findByTestId('i18n-toolbar-panel');
     expect(panel.textContent).toContain('missing.key');
-    expect(panel.textContent).toContain('Key as Value');
+    expect(panel.textContent).toContain('Missing');
   });
 
-  it('shows resolution groups', () => {
+  it('shows resolution groups', async () => {
     render(
       <I18nProvider instance={instance}>
         <TestApp />
@@ -94,7 +101,7 @@ describe('DevToolbar', () => {
     );
 
     fireEvent.click(screen.getByTestId('i18n-toolbar-toggle'));
-    const panel = screen.getByTestId('i18n-toolbar-panel');
+    const panel = await screen.findByTestId('i18n-toolbar-panel');
     expect(panel.textContent).toContain('Primary');
   });
 
@@ -110,7 +117,7 @@ describe('DevToolbar', () => {
     expect(btn.textContent).toMatch(/\d+/);
   });
 
-  it('toggles panel open and closed', () => {
+  it('toggles panel open and closed', async () => {
     render(
       <I18nProvider instance={instance}>
         <TestApp />
@@ -124,7 +131,7 @@ describe('DevToolbar', () => {
 
     // Open
     fireEvent.click(btn);
-    expect(screen.getByTestId('i18n-toolbar-panel')).toBeDefined();
+    await screen.findByTestId('i18n-toolbar-panel');
 
     // Close
     fireEvent.click(btn);

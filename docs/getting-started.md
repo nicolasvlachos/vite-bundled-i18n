@@ -1,38 +1,30 @@
 # Getting Started
 
+`vite-bundled-i18n` treats translations as **code dependencies**, not global runtime data. The Vite plugin walks your page components at build time, extracts every translation key each route uses via AST analysis, and emits scope-matched bundles. Each page ships only the translations it needs — the rest are tree-shaken and never sent to the client.
+
 ## Install
 
 Requirements:
 
 - Node `>=20`
 - a Vite app
-- `react` and `react-dom` only if you use the React adapter
+- `react` and `react-dom` if you use the React adapter
+- `vue` if you use the Vue adapter
 
 ```bash
 npm install vite-bundled-i18n
 ```
 
-If you use React:
+For React:
 
 ```bash
 npm install react react-dom
 ```
 
-If you use Vue:
+For Vue:
 
 ```bash
 npm install vue
-```
-
-For local package testing:
-
-```bash
-# in this repo
-npm run build
-npm pack
-
-# in your app
-npm install /absolute/path/to/vite-bundled-i18n-<version>.tgz
 ```
 
 ## 1. Translation files
@@ -91,8 +83,6 @@ export const i18nConfig = defineI18nConfig({
 })
 ```
 
-`keys: ['shared']` is still supported, but `include` is the more explicit model.
-
 Pattern examples:
 
 - `shared.*`
@@ -101,8 +91,6 @@ Pattern examples:
 - `admin*`
 
 ## 3. Vite plugin
-
-Use the unified plugin entry:
 
 ```ts
 // vite.config.ts
@@ -118,24 +106,39 @@ export default defineConfig({
       pages: ['src/pages/**/*.tsx'],
       locales: ['en', 'bg'],
       defaultLocale: 'en',
-      generatedOutDir: '.i18n',
-      // types are generated to .i18n/i18n-generated.ts by default
     }),
   ],
 })
 ```
 
-In dev, it serves bundle URLs on demand.
-
-In build, it emits:
+`i18nPlugin` takes two arguments: the shared config and plugin-specific options. In dev it serves bundle URLs on demand via Vite middleware. In build it emits:
 
 - `__i18n/{locale}/_dict/{name}.json`
 - `__i18n/{locale}/{scope}.json`
 - `__i18n/compiled/manifest.js`
 - compiled map modules under `__i18n/compiled`
 
-`i18nPlugin()` is the primary entry. It wraps the dev and build plugin paths so
-the bundle model stays aligned across environments.
+**Devtools:** Pass `dev: { devBar: true }` to show the translation drawer during development. It displays per-page key usage, bundle efficiency, and missing translations without any server round-trips:
+
+```ts
+i18nPlugin(i18nConfig, {
+  pages: ['src/pages/**/*.tsx'],
+  locales: ['en', 'bg'],
+  defaultLocale: 'en',
+  dev: { devBar: true },
+})
+```
+
+**Sidecar setups** (e.g. Laravel serving assets from `public/`):
+
+```ts
+i18nPlugin(i18nConfig, {
+  pages: ['src/pages/**/*.tsx'],
+  locales: ['en', 'bg'],
+  defaultLocale: 'en',
+  dev: { emitPublicAssets: true },
+})
+```
 
 ## 4. Runtime instance
 
@@ -162,20 +165,29 @@ export const i18n = createI18n({
 })
 ```
 
-Compiled mode can also be forced or customized:
+## 5. TypeScript — enable autocomplete
 
-```ts
-createI18n({
-  ...config,
-  compiled: {
-    enabled: 'auto',
+Add to your `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "paths": {
+      "vite-bundled-i18n/generated": ["./.i18n/i18n-generated.ts"]
+    }
   },
-})
+  "include": ["src", ".i18n"]
+}
 ```
 
-## 5. React provider
+Types are generated automatically during `npm run dev` and `npm run build`. They give you key autocomplete, invalid key errors, and placeholder checking.
+
+## 6. React integration
+
+Wrap your app with `I18nProvider`. It blocks rendering until dictionaries are loaded:
 
 ```tsx
+// src/main.tsx
 import { createRoot } from 'react-dom/client'
 import { I18nProvider } from 'vite-bundled-i18n/react'
 import { i18n } from './i18n'
@@ -188,28 +200,7 @@ createRoot(document.getElementById('root')!).render(
 )
 ```
 
-The provider blocks rendering until dictionaries are loaded. The `fallback` prop controls what shows during loading (`null` for blank screen, or a spinner component). Once loaded, children render and dictionaries are always available to all components.
-
-## 6. React usage
-
-Without a scope:
-
-```tsx
-import { useI18n } from 'vite-bundled-i18n/react'
-
-function Header() {
-  const { t, translations } = useI18n()
-
-  return (
-    <header>
-      <strong>{t('global.appName', 'Store')}</strong>
-      <nav>{translations.namespace('global').get('nav.home', 'Home')}</nav>
-    </header>
-  )
-}
-```
-
-With a scope:
+In page components, call `useI18n(scope)` to load the scope bundle for that route:
 
 ```tsx
 import { useI18n } from 'vite-bundled-i18n/react'
@@ -228,7 +219,36 @@ function ProductsPage() {
 }
 ```
 
-## 6.5. Vue usage
+`useI18n(scope)` triggers one HTTP request to load the scope bundle. Dictionaries are always available. Previously visited scopes are instant (cached).
+
+Use `I18nBoundary` to avoid early returns in components that need a scope:
+
+```tsx
+import { I18nBoundary } from 'vite-bundled-i18n/react'
+
+<I18nBoundary scope="products.index" fallback={<Spinner />}>
+  <ProductsPage />
+</I18nBoundary>
+```
+
+For layout and shared UI that only use dictionary keys (no scope needed):
+
+```tsx
+function Header() {
+  const { t, translations } = useI18n()
+
+  return (
+    <header>
+      <strong>{t('global.appName', 'Store')}</strong>
+      <nav>{translations.namespace('global').get('nav.home', 'Home')}</nav>
+    </header>
+  )
+}
+```
+
+## 6.5. Vue integration
+
+Register the plugin on your Vue app:
 
 ```ts
 // src/main.ts
@@ -242,7 +262,7 @@ app.use(createI18nPlugin(i18n))
 app.mount('#app')
 ```
 
-In components:
+In components, use the `useI18n` composable:
 
 ```vue
 <script setup lang="ts">
@@ -259,7 +279,7 @@ const { t, ready } = useI18n('products.index')
 </template>
 ```
 
-## 7. Non-React usage
+## 7. Vanilla JS
 
 ```ts
 import { getTranslations } from 'vite-bundled-i18n'
@@ -278,8 +298,7 @@ t('shared.ok')
 getGlobalTranslations().tryGet('products.show.title')
 ```
 
-In React, registration happens through `<I18nProvider>`.
-Outside React, call `setGlobalInstance(instance)` or use the translator object directly.
+In React, registration happens through `<I18nProvider>`. Outside React, call `setGlobalInstance(instance)` or use the translator object directly.
 
 ## 8. Data files
 
@@ -294,7 +313,7 @@ export const nav = defineI18nData([
 ])
 ```
 
-Then resolve later:
+Then resolve at render time:
 
 ```tsx
 const { t } = useI18n()
@@ -308,29 +327,259 @@ Avoid eager module-top-level translation:
 export const nav = [{ label: t('global.nav.home') }]
 ```
 
-## 9. Generated types
+## 9. Dynamic keys (unsafe patterns)
 
-`npm run dev`, `vite build`, and the CLI all write `.i18n/i18n-generated.ts`.
+The AST extractor works with **static string literals**. It cannot analyze dynamic keys — these are invisible at build time and will be missing from scope bundles.
 
-That gives you:
-
-- key autocomplete
-- invalid key errors
-- placeholder checking
+### What works (static — extracted at build time)
 
 ```ts
-translations.get('products.show.price', { amount: 29.99 })
+t('products.index.heading')                    // ✅ literal string
+t('shared.actions.save')                       // ✅ literal string
+i18nKey('global.nav.home')                     // ✅ recognized helper
+const key = 'products.show.title' as const     // ✅ const assertion
 ```
 
-This type-checks.
+### What doesn't work (dynamic — invisible to the extractor)
 
 ```ts
-translations.get('products.show.price')
+// ❌ Concatenated keys — extractor sees nothing
+t(`products.${page}.title`)
+t('products.' + action + '.label')
+
+// ❌ Variable keys — not a string literal
+const key = getKeyFromApi()
+t(key)
+
+// ❌ Computed from loops
+items.forEach(item => t(`items.${item.type}.name`))
 ```
 
-This should fail when generated placeholder metadata exists.
+### How to handle dynamic keys safely
 
-## 10. Reports
+**Option 1: Use dictionaries.** Put dynamic-range keys in a dictionary so they're always available:
+
+```ts
+// i18n.config.ts — all items.* keys are in the global dictionary
+dictionaries: {
+  global: {
+    include: ['shared.*', 'items.*'],
+    pinned: true,
+  },
+}
+```
+
+Now `t('items.weapon.name')` works even though the extractor can't see which `item.type` values exist — the entire `items.*` namespace is preloaded.
+
+**Option 2: Enumerate the possible keys.** If the set is known, list them so the extractor finds them:
+
+```ts
+// ✅ All possible keys are visible as string literals
+const STATUS_KEYS = {
+  active: 'users.status.active',
+  inactive: 'users.status.inactive',
+  pending: 'users.status.pending',
+} as const
+
+function StatusBadge({ status }: { status: keyof typeof STATUS_KEYS }) {
+  const { t } = useI18n('users.index')
+  return <span>{t(STATUS_KEYS[status])}</span>
+}
+```
+
+**Option 3: Use `defineI18nData` for data-driven keys:**
+
+```ts
+import { defineI18nData, i18nKey } from 'vite-bundled-i18n'
+
+export const columns = defineI18nData([
+  { field: 'name', label: i18nKey('products.table.name') },
+  { field: 'price', label: i18nKey('products.table.price') },
+  { field: 'stock', label: i18nKey('products.table.stock') },
+])
+```
+
+**Option 4: Configure `keyFields` for object property extraction:**
+
+```ts
+// i18n.config.ts
+defineI18nConfig({
+  localesDir: 'locales',
+  extraction: {
+    keyFields: ['label', 'title', 'placeholder', 'message'],
+  },
+})
+```
+
+Now the extractor recognizes translation keys in any object literal with those property names:
+
+```ts
+// ✅ These keys will be extracted automatically
+const columns = [
+  { label: 'products.table.name', field: 'name' },
+  { title: 'products.table.price', field: 'price' },
+]
+```
+
+### The rule of thumb
+
+If the extractor can see the key as a string literal at build time, it works. If the key is computed at runtime, use a dictionary to ensure availability.
+
+## 10. Loading strategies
+
+### Strategy 1: Scope-per-page (default, recommended)
+
+Each page loads one scope bundle on mount. Best for large apps with many pages.
+
+```tsx
+// Each page declares its scope — one fetch per page
+function ProductsPage() {
+  const { t, ready } = useI18n('products.index')
+  // ...
+}
+
+function CartPage() {
+  const { t, ready } = useI18n('cart')
+  // ...
+}
+```
+
+**Tradeoff:** First visit to each page has a small loading delay. Subsequent visits are instant (cached).
+
+### Strategy 2: Eager preload (small apps)
+
+Preload all scopes upfront. Best for apps with <10 pages where total translation size is small.
+
+```tsx
+<I18nProvider
+  instance={i18n}
+  fallback={<Spinner />}
+  preloadScopes={['products.index', 'cart', 'account', 'settings']}
+>
+  <App />
+</I18nProvider>
+```
+
+**Tradeoff:** Larger initial load, but zero delay on navigation.
+
+### Strategy 3: Dictionary-heavy (admin panels)
+
+Put most keys in dictionaries. Use scopes only for very large page-specific namespaces.
+
+```ts
+dictionaries: {
+  global: {
+    include: ['shared.*', 'global.*', 'actions.*', 'validation.*'],
+    pinned: true,
+  },
+  admin: {
+    include: ['admin.*', 'users.*', 'roles.*', 'settings.*'],
+    pinned: true,
+  },
+}
+```
+
+**Tradeoff:** Larger dictionary bundle, but almost everything is available immediately.
+
+### Strategy 4: SSR hydration (zero client loading)
+
+Inject translations server-side so critical-path UI renders without any client fetch:
+
+```ts
+// Server
+const { translations, scriptTag } = await initServerI18n(config, 'products.show')
+// Inject scriptTag into HTML
+```
+
+```tsx
+// Client — I18nProvider auto-detects window.__I18N_RESOURCES__
+<I18nProvider instance={i18n}>
+  <App />
+</I18nProvider>
+```
+
+**Tradeoff:** Requires server integration. Best for SEO-critical pages.
+
+### Strategy 5: Inertia.js / Laravel shared props
+
+Inject dictionary data via Inertia shared props so the provider starts with cached data:
+
+```tsx
+const { locale, resources } = usePage().props.i18nResources
+for (const [namespace, data] of Object.entries(resources)) {
+  i18n.addResources(locale, namespace, data)
+}
+
+<I18nProvider instance={i18n} serverDictionaries={['global']}>
+  <App />
+</I18nProvider>
+```
+
+## 11. Compiled mode vs JSON mode
+
+The build emits two formats for every bundle. The runtime tries compiled first, falls back to JSON.
+
+### JSON mode (fetch)
+
+```
+__i18n/en/_dict/global.json     →  fetch() → JSON.parse() → nested object
+__i18n/en/products.index.json   →  fetch() → JSON.parse() → nested object
+```
+
+- Works everywhere (SSR, edge workers, no ES module support needed)
+- Simpler debugging (inspect network responses directly)
+- Slightly slower: JSON.parse + object traversal per lookup
+
+### Compiled mode (import)
+
+```
+__i18n/compiled/manifest.js     →  import() → Map<string, string>
+__i18n/compiled/en/_dict/global.js → import() → flat Map
+```
+
+- O(1) key lookups (flat `Map.get()`, no dot-path traversal)
+- Browser caches modules natively (304 responses, disk cache)
+- Code-split by the bundler like any other JS module
+- Falls back to JSON automatically if module loading fails
+
+### Controlling the mode
+
+```ts
+// Build: disable compiled output entirely (JSON only)
+i18nPlugin(i18nConfig, {
+  emitCompiled: false,
+})
+
+// Runtime: force JSON mode even if compiled modules exist
+createI18n({
+  ...config,
+  compiled: { enabled: false },
+})
+
+// Runtime: force compiled mode
+createI18n({
+  ...config,
+  compiled: { enabled: true, manifestUrl: '/assets/__i18n/compiled/manifest.js' },
+})
+
+// Runtime: auto (default) — use compiled if the build injected a manifest URL
+createI18n({
+  ...config,
+  compiled: { enabled: 'auto' },
+})
+```
+
+### When to use which
+
+| Scenario | Recommended mode |
+|----------|-----------------|
+| SPA (React, Vue) | Compiled (default) — best performance |
+| SSR / Node.js | JSON — no ES module loader needed |
+| Edge workers (Cloudflare) | JSON — simpler runtime |
+| Large translation files | Compiled — avoids JSON.parse overhead |
+| Debugging translations | JSON — inspectable in network tab |
+
+## 12. Build reports
 
 The build pipeline writes:
 
@@ -343,11 +592,9 @@ The build pipeline writes:
 
 `ownership.json` explains dictionary ownership, collisions, and unowned keys.
 
-## 10.5 Cache
+## 13. Cache
 
 The runtime cache is namespace-based, not leaf-string based.
-
-Example:
 
 ```ts
 cache: {
@@ -369,94 +616,7 @@ Useful instance APIs:
 - `unloadNamespace(locale, namespace)`
 - `evictUnused()`
 
-## Framework Integration (Laravel, Rails, Django)
-
-If your framework serves built assets under a URL prefix (e.g. `/build/`), set Vite's `base` option:
-
-```ts
-// vite.config.ts
-export default defineConfig({
-  base: '/build/',
-  plugins: [
-    i18nPlugin(i18nConfig, { /* ... */ }),
-  ],
-})
-```
-
-The i18n runtime reads the base path at build time automatically. No additional configuration needed.
-
-For non-standard setups (CDN, reverse proxy), use the `publicBase` override on the runtime instance:
-
-```ts
-const i18n = createI18n({
-  ...i18nConfig,
-  publicBase: 'https://cdn.example.com/__i18n',
-})
-```
-
-## Compiled Mode vs JSON Mode
-
-The build emits two formats for every bundle:
-
-| Format | File | Loading | Use when |
-|--------|------|---------|----------|
-| Compiled JS | `__i18n/compiled/{locale}/_dict/global.js` | Dynamic `import()` | Default for production. Faster parsing, cacheable by bundler. |
-| JSON | `__i18n/{locale}/_dict/global.json` | `fetch()` | Fallback. Works anywhere, no JS parser needed. |
-
-**Runtime behavior:**
-1. Tries compiled manifest first (`import()`)
-2. If compiled mode fails or is disabled, falls back to JSON (`fetch()`)
-
-**To disable compiled mode** (reduce build output):
-
-```ts
-i18nPlugin(i18nConfig, {
-  emitCompiled: false, // only emit JSON bundles
-})
-```
-
-**To force JSON mode at runtime:**
-
-```ts
-const i18n = createI18n({
-  ...config,
-  compiled: { enabled: false },
-})
-```
-
-**When to use which:**
-- **Compiled (default):** Best for SPAs. Modules are code-split and cached by the browser's module loader.
-- **JSON only:** Best for SSR, edge workers, or environments without ES module support. Also useful to reduce total build output size.
-
-## Type Generation
-
-Types are generated from locale JSON files during `vite build` and `npm run i18n -- generate`.
-
-The Vite dev plugin re-generates types automatically when locale JSON files change during `npm run dev`.
-
-If you modify translation files outside of dev mode, re-run manually:
-
-```bash
-npm run i18n -- generate
-```
-
-### Locale Directory Structure
-
-The plugin expects one flat JSON file per namespace:
-
-```
-locales/
-  en/
-    shared.json      ← namespace "shared"
-    products.json    ← namespace "products"
-  bg/
-    shared.json
-    products.json
-```
-
-Subdirectories within a locale folder are not supported. Each `{namespace}.json` file contains the nested keys for that namespace.
-
-## 11. SSR
+## 14. SSR
 
 Server:
 
@@ -492,25 +652,15 @@ Client (Vue):
 app.use(createI18nPlugin(i18n))
 ```
 
-Both adapters automatically detect `window.__I18N_RESOURCES__` injected by the server's `scriptTag` and hydrate without any extra props or configuration.
+Both adapters automatically detect `window.__I18N_RESOURCES__` injected by the server's `scriptTag` and hydrate without any extra configuration.
 
-For vanilla JS hydration, `serverResources` is still supported:
+## 15. Package entries
 
-```ts
-import { initI18n } from 'vite-bundled-i18n/vanilla'
-
-const i18n = await initI18n(config, {
-  serverResources: resources,
-})
-```
-
-## 12. Package Entries
-
-Available imports:
-
-- `vite-bundled-i18n`
-- `vite-bundled-i18n/react`
-- `vite-bundled-i18n/vanilla`
-- `vite-bundled-i18n/vue`
-- `vite-bundled-i18n/server`
-- `vite-bundled-i18n/plugin`
+| Entry | Purpose |
+|-------|---------|
+| `vite-bundled-i18n` | Core runtime, config helpers, type utilities |
+| `vite-bundled-i18n/react` | `I18nProvider`, `useI18n`, `I18nBoundary`, `DevToolbar` |
+| `vite-bundled-i18n/vue` | `createI18nPlugin`, `useI18n` |
+| `vite-bundled-i18n/vanilla` | `getTranslations`, `initI18n` |
+| `vite-bundled-i18n/server` | `initServerI18n` (SSR) |
+| `vite-bundled-i18n/plugin` | Vite plugin (`i18nPlugin`) |

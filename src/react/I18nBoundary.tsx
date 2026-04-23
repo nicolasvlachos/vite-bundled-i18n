@@ -1,9 +1,10 @@
 import { type ReactNode } from 'react';
 import { useI18n } from './useI18n';
+import type { ValidScope } from '../core/types';
 
 export interface I18nBoundaryProps {
   /** Scope to load (e.g., 'products.index') */
-  scope: string;
+  scope: ValidScope;
   /** Rendered while translations are loading */
   fallback?: ReactNode;
   /** Rendered once translations are ready */

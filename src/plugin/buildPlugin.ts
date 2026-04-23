@@ -105,7 +105,7 @@ export function emitI18nBuildArtifacts(
   });
 
   if (buildConfig.emitTypes !== false) {
-    const scopeNames = analysis.routes.map(r => r.routeId);
+    const scopeNames = [...new Set(analysis.routes.flatMap((route) => route.scopes))].sort();
     writeTypes(localesDir, buildConfig.defaultLocale, typesOutPath, scopeNames);
   }
 
@@ -185,6 +185,8 @@ export function i18nBuildPlugin(
       const manifestUrl = joinPublicPath(base, `${assetsDir}/compiled/manifest.js`);
       return {
         define: {
+          __VITE_I18N_DEV__: JSON.stringify(false),
+          __VITE_I18N_DEVBAR__: JSON.stringify(false),
           __VITE_I18N_COMPILED_MANIFEST__: JSON.stringify(manifestUrl),
           __VITE_I18N_BASE__: JSON.stringify(i18nBase),
         },

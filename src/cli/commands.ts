@@ -54,6 +54,10 @@ function runWalker(config: CliConfig): ProjectAnalysis {
   });
 }
 
+function collectScopeNames(analysis: ProjectAnalysis): string[] {
+  return [...new Set(analysis.routes.flatMap((route) => route.scopes))].sort();
+}
+
 /**
  * Pad a string to the given width.
  */
@@ -146,7 +150,7 @@ export function generate(config: CliConfig): void {
     outDir,
   });
 
-  writeTypes(localesDir, config.defaultLocale, typesOutPath);
+  writeTypes(localesDir, config.defaultLocale, typesOutPath, collectScopeNames(analysis));
 
   console.log(`Generated ${bundles.length} bundle(s):`);
   for (const b of bundles) {
@@ -233,7 +237,7 @@ export function build(config: CliConfig): void {
     outDir,
   });
 
-  writeTypes(localesDir, config.defaultLocale, typesOutPath);
+  writeTypes(localesDir, config.defaultLocale, typesOutPath, collectScopeNames(analysis));
 
   console.log(`\nGenerated ${bundles.length} bundle(s)`);
   console.log(`Types written to ${typesOutPath}`);

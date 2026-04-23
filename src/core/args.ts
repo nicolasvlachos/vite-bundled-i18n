@@ -1,3 +1,10 @@
+/** Normalized result of resolving overloaded translation function arguments. */
+export interface ResolvedArgs {
+  key: string;
+  params?: Record<string, unknown>;
+  fallback?: string;
+}
+
 /**
  * Resolves the overloaded arguments of translation functions into a normalized form.
  *
@@ -14,7 +21,7 @@ export function resolveArgs(
     | [string, string]
     | [string, Record<string, unknown>]
     | [string, Record<string, unknown>, string],
-): { key: string; params?: Record<string, unknown>; fallback?: string } {
+): ResolvedArgs {
   const [key, second, third] = args;
 
   if (second == null) {

@@ -7,6 +7,7 @@ import {
   fetchNamespaceFromUrl,
 } from '../fetcher';
 import { resolveRequestInit } from '../createI18n';
+import { inferNamespace } from '../resolver';
 
 // ---------------------------------------------------------------------------
 // Types / interfaces
@@ -116,21 +117,6 @@ export interface BundleLoader {
    * @param namespaces - Array of namespace names to load.
    */
   loadNamespaces(locale: string, namespaces: string[]): Promise<void>;
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Extract the root namespace from a scope identifier.
- *
- * @param scope - Scope identifier (e.g. `"products.show"`).
- * @returns The root namespace (e.g. `"products"`).
- */
-function getScopeNamespace(scope: string): string {
-  const dot = scope.indexOf('.');
-  return dot === -1 ? scope : scope.slice(0, dot);
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +234,7 @@ export function createBundleLoader(
 
   async function loadScope(locale: string, scope: string): Promise<void> {
     const scopeKey = `${locale}:${scope}`;
-    const namespace = getScopeNamespace(scope);
+    const namespace = inferNamespace(scope);
 
     if (cache.isScopeLoaded(locale, scope)) return;
 

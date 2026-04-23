@@ -1,16 +1,29 @@
-import type { I18nConfig, I18nInstance, NestedTranslations, KeyUsageEntry } from './types';
-import { createStore } from './store';
+import type { I18nConfig, I18nInstance, NestedTranslations } from './types';
 import { resolveKey, inferNamespace, extractSubkey } from './resolver';
 import { interpolate } from './interpolator';
-import { buildBundlePath, buildLoadPath, fetchBundleFromUrl, fetchNamespaceFromUrl } from './fetcher';
 import {
   compiledHasKeyInMap,
-  compiledTranslateFromMap,
+
   compiledTryTranslateFromMap,
   loadCompiledManifest,
   type CompiledManifestModule,
   type CompiledTranslationMap,
 } from './compiled-runtime';
+import {
+  getDefinedDevFlag,
+  getHmrClient,
+  I18N_DEV_UPDATE_EVENT,
+  isDevRuntime,
+  type I18nDevUpdatePayload,
+} from './runtime-env';
+import { createKeyTracker } from './services/key-tracker';
+import { createCacheManager } from './services/cache-manager';
+import { createBundleLoader, type CompiledLoader } from './services/bundle-loader';
+import { createLocaleManager } from './services/locale-manager';
+
+// ---------------------------------------------------------------------------
+// Exported helpers
+// ---------------------------------------------------------------------------
 
 /**
  * Resolves the requestInit config value to a concrete RequestInit object.
@@ -24,26 +37,9 @@ export async function resolveRequestInit(
   return requestInit;
 }
 
-function resolveRuntimeCache(config: I18nConfig) {
-  const runtime = config.cache?.runtime;
-
-  if (runtime === 'none') {
-    return { strategy: 'none', eviction: 'none', pinDictionaries: false } as const;
-  }
-
-  if (runtime === 'memory' || runtime == null) {
-    return { strategy: 'memory', eviction: 'none', pinDictionaries: true } as const;
-  }
-
-  return {
-    strategy: runtime.strategy ?? 'memory',
-    eviction: runtime.eviction ?? 'none',
-    maxLocales: runtime.maxLocales,
-    maxNamespaces: runtime.maxNamespaces,
-    maxBytes: runtime.maxBytes,
-    pinDictionaries: runtime.pinDictionaries ?? true,
-  } as const;
-}
+// ---------------------------------------------------------------------------
+// Internal config helpers
+// ---------------------------------------------------------------------------
 
 function getInjectedI18nBase(): string | undefined {
   return typeof __VITE_I18N_BASE__ !== 'undefined'
@@ -68,16 +64,29 @@ function getInjectedCompiledManifestUrl(): string | undefined {
 function shouldUseCompiledRuntime(config: I18nConfig, manifestUrl?: string): boolean {
   if (config.compiled?.enabled === false) return false;
   if (config.compiled?.enabled === true) return true;
+  if (isDevRuntime()) return false;
   if (config.compiled?.enabled === 'auto') return !!manifestUrl;
   return !!manifestUrl;
 }
+
+/** Whether dev-namespace scope bundles should be used (dev mode without resolveUrl). */
+function shouldUseDevNamespaceScopeBundles(config: I18nConfig): boolean {
+  if (config.resolveUrl) return false;
+  return getDefinedDevFlag() === true;
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
 
 /**
  * Creates and configures an i18n instance.
  *
  * This is the main entry point for setting up translations. It assembles
- * the resource store, key resolver, interpolator, and fetcher into a
- * single {@link I18nInstance} with a unified API.
+ * four internal services — {@link createKeyTracker KeyTracker},
+ * {@link createCacheManager CacheManager}, {@link createBundleLoader BundleLoader},
+ * and {@link createLocaleManager LocaleManager} — into a single
+ * {@link I18nInstance} with a unified API.
  *
  * Translation loading uses bundles:
  * - **Named dictionaries** — one HTTP request per dictionary name
@@ -106,6 +115,8 @@ function shouldUseCompiledRuntime(config: I18nConfig, manifestUrl?: string): boo
  * ```
  */
 export function createI18n(config: I18nConfig): I18nInstance {
+  // -- Config validation ------------------------------------------------------
+
   if (!config.locale || typeof config.locale !== 'string') {
     throw new Error('vite-bundled-i18n: locale must be a non-empty string');
   }
@@ -121,10 +132,12 @@ export function createI18n(config: I18nConfig): I18nInstance {
     );
   }
 
-  const store = createStore();
   const frozenConfig = Object.freeze({ ...config });
   const i18nBase = resolveI18nBase(config);
-  const runtimeCache = resolveRuntimeCache(config);
+  const devNamespaceMode = shouldUseDevNamespaceScopeBundles(config);
+
+  // -- Compiled runtime setup -------------------------------------------------
+
   // Derive manifest URL. Resolution order:
   // 1. resolveUrl callback (if provided)
   // 2. explicit compiled.manifestUrl
@@ -137,37 +150,6 @@ export function createI18n(config: I18nConfig): I18nInstance {
       ?? getInjectedCompiledManifestUrl());
   const useCompiledRuntime = shouldUseCompiledRuntime(config, compiledManifestUrl);
   let compiledRuntimeActive = useCompiledRuntime;
-
-  let currentLocale = config.locale;
-  const localeListeners = new Set<(locale: string) => void>();
-
-  /** Tracks which scopes have been loaded per locale. */
-  const loadedScopes = new Set<string>();
-
-  /** Tracks which named dictionaries have been loaded per locale. */
-  const loadedDicts = new Set<string>();
-
-  /** Key usage log for dev diagnostics. */
-  const keyUsage: KeyUsageEntry[] = [];
-
-  /** The current scope set by useI18n, used for key tracking. */
-  let activeScope: string | undefined;
-  /** Tracks whether a consolidated fetch error has been emitted. */
-  let fetchErrorEmitted = false;
-
-  /** Dedup set for dev-mode missing key warnings. */
-  const warnedMissingKeys = new Set<string>();
-
-  function handleFetchError(): void {
-    if (!fetchErrorEmitted) {
-      fetchErrorEmitted = true;
-      console.error(
-        'vite-bundled-i18n: Cannot load translations. ' +
-        'Ensure __i18n assets are accessible at the configured base path. ' +
-        'Are you running the Vite dev server, or have you built with the i18n plugin?'
-      );
-    }
-  }
 
   let compiledManifestPromise: Promise<CompiledManifestModule | null> | null = null;
   const compiledLocaleMaps = new Map<string, CompiledTranslationMap>();
@@ -212,96 +194,93 @@ export function createI18n(config: I18nConfig): I18nInstance {
     return true;
   }
 
-  function clearLoadMarkersForNamespace(locale: string, namespace: string): void {
-    for (const scopeKey of [...loadedScopes]) {
-      const [scopeLocale, scope] = scopeKey.split(':');
-      if (scopeLocale !== locale || !scope) continue;
-      const scopeNamespace = scope.includes('.') ? scope.slice(0, scope.indexOf('.')) : scope;
-      if (scopeNamespace === namespace) {
-        loadedScopes.delete(scopeKey);
+  // -- Create services --------------------------------------------------------
+
+  const keyTracker = createKeyTracker(isDevRuntime());
+
+  const cache = createCacheManager(
+    { dictionaries: config.dictionaries, cache: config.cache },
+    { devNamespaceMode },
+  );
+
+  // Build a compiled loader bridge that the BundleLoader can use
+  // to try compiled modules before falling back to fetch.
+  const compiledLoader: CompiledLoader | undefined = useCompiledRuntime
+    ? {
+        async loadDictionary(locale: string, name: string): Promise<boolean> {
+          const manifest = await getCompiledManifest();
+          return loadCompiledModule(locale, manifest?.dictionaries?.[name]?.[locale]);
+        },
+        async loadScope(locale: string, scope: string): Promise<boolean> {
+          const manifest = await getCompiledManifest();
+          return loadCompiledModule(locale, manifest?.scopes?.[scope]?.[locale]);
+        },
       }
-    }
+    : undefined;
 
-    for (const dictKey of [...loadedDicts]) {
-      const [dictLocale, dictName] = dictKey.split(':');
-      if (dictLocale !== locale || !dictName) continue;
-      const dict = config.dictionaries?.[dictName];
-      if ((dict?.keys ?? []).includes(namespace)) {
-        loadedDicts.delete(dictKey);
-      }
-    }
-  }
+  /** Tracks whether a consolidated fetch error has been emitted. */
+  let fetchErrorEmitted = false;
 
-  function clearLoadMarkersForLocale(locale: string): void {
-    for (const scopeKey of [...loadedScopes]) {
-      if (scopeKey.startsWith(`${locale}:`)) {
-        loadedScopes.delete(scopeKey);
-      }
-    }
-    for (const dictKey of [...loadedDicts]) {
-      if (dictKey.startsWith(`${locale}:`)) {
-        loadedDicts.delete(dictKey);
-      }
-    }
-  }
-
-  function evictUnused(): void {
-    if (runtimeCache.strategy === 'none' || runtimeCache.eviction === 'none') {
-      return;
-    }
-
-    const entries = store.getEntries();
-    const nonPinned = entries
-      .filter((entry) => !entry.pinned)
-      .sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
-
-    const evictOne = () => {
-      const candidate = nonPinned.shift();
-      if (!candidate) return false;
-      store.removeNamespace(candidate.locale, candidate.namespace);
-      clearLoadMarkersForNamespace(candidate.locale, candidate.namespace);
-      return true;
-    };
-
-    if (runtimeCache.maxLocales !== undefined) {
-      while (store.getStats().totalLocales > runtimeCache.maxLocales) {
-        const localeCandidates = new Map<string, number>();
-        for (const entry of nonPinned) {
-          const previous = localeCandidates.get(entry.locale) ?? Number.POSITIVE_INFINITY;
-          localeCandidates.set(entry.locale, Math.min(previous, entry.lastAccessedAt));
+  const loader = createBundleLoader(
+    {
+      locale: config.locale,
+      defaultLocale: config.defaultLocale,
+      localesDir: config.localesDir,
+      dictionaries: config.dictionaries,
+      requestInit: config.requestInit,
+      resolveUrl: config.resolveUrl,
+    },
+    cache,
+    i18nBase,
+    {
+      devNamespaceMode,
+      compiledLoader,
+      onFetchError() {
+        if (!fetchErrorEmitted) {
+          fetchErrorEmitted = true;
+          console.error(
+            'vite-bundled-i18n: Cannot load translations. ' +
+            'Ensure __i18n assets are accessible at the configured base path. ' +
+            'Are you running the Vite dev server, or have you built with the i18n plugin?'
+          );
         }
+      },
+      pinDictionaries: (() => {
+        const runtime = config.cache?.runtime;
+        if (runtime === 'none') return false;
+        if (runtime === 'memory' || runtime == null) return true;
+        return runtime.pinDictionaries ?? true;
+      })(),
+    },
+  );
 
-        const localeToEvict = [...localeCandidates.entries()]
-          .filter(([locale]) => locale !== currentLocale)
-          .sort((a, b) => a[1] - b[1])[0]?.[0];
+  const localeManager = createLocaleManager(config.locale, loader, cache);
 
-        if (!localeToEvict) break;
-        store.removeLocale(localeToEvict);
-        clearLoadMarkersForLocale(localeToEvict);
-        for (let i = nonPinned.length - 1; i >= 0; i--) {
-          if (nonPinned[i].locale === localeToEvict) {
-            nonPinned.splice(i, 1);
-          }
-        }
-      }
-    }
+  // -- Warning suppression for loading scopes --------------------------------
 
-    if (runtimeCache.maxNamespaces !== undefined) {
-      while (store.getStats().totalNamespaces > runtimeCache.maxNamespaces) {
-        if (!evictOne()) break;
-      }
-    }
-
-    if (runtimeCache.maxBytes !== undefined) {
-      while (store.getStats().approxTotalBytes > runtimeCache.maxBytes) {
-        if (!evictOne()) break;
-      }
-    }
-  }
+  /** Scopes currently being loaded by useI18n hooks. */
+  const loadingScopes = new Set<string>();
 
   /**
-   * Resolves a fully qualified key against the store, with fallback chain.
-   * Records the resolution in the key usage log for dev diagnostics.
+   * Check if a key belongs to a scope that's currently loading.
+   * If so, the missing-key warning should be suppressed.
+   */
+  function isKeyInLoadingScope(key: string): boolean {
+    if (loadingScopes.size === 0) return false;
+    for (const scope of loadingScopes) {
+      // A scope like 'products.index' covers keys starting with 'products.'
+      const ns = scope.indexOf('.') === -1 ? scope : scope.slice(0, scope.indexOf('.'));
+      if (key.startsWith(`${ns}.`)) return true;
+    }
+    return false;
+  }
+
+  // -- Translate / hasKey (orchestrator owns these) ---------------------------
+
+  /**
+   * Resolves a fully qualified key against the cache, with fallback chain.
+   * When compiled runtime is active, delegates to the compiled map instead.
+   * Records the resolution in the key tracker for dev diagnostics.
    */
   function translate(
     locale: string,
@@ -310,36 +289,59 @@ export function createI18n(config: I18nConfig): I18nInstance {
     fallback?: string,
   ): string {
     if (compiledRuntimeActive) {
-      recordUsage(key, inferNamespace(key), locale, 'primary');
-      return compiledTranslateFromMap(getCompiledLocaleMap(locale), key, params, fallback);
+      const namespace = inferNamespace(key);
+      // Try requested locale
+      const primaryValue = compiledTryTranslateFromMap(getCompiledLocaleMap(locale), key, params);
+      if (primaryValue !== undefined) {
+        keyTracker.recordUsage(key, namespace, locale, 'primary');
+        return primaryValue;
+      }
+      // Fallback to default locale (same chain as JSON mode)
+      if (locale !== config.defaultLocale) {
+        const fallbackValue = compiledTryTranslateFromMap(getCompiledLocaleMap(config.defaultLocale), key, params);
+        if (fallbackValue !== undefined) {
+          keyTracker.recordUsage(key, namespace, locale, 'fallback-locale');
+          return fallbackValue;
+        }
+      }
+      // Fallback string or key
+      if (fallback !== undefined) {
+        keyTracker.recordUsage(key, namespace, locale, 'fallback-string');
+        return interpolate(fallback, params);
+      }
+      keyTracker.recordUsage(key, namespace, locale, 'key-as-value');
+      if (!isKeyInLoadingScope(key)) {
+        keyTracker.warnMissing(key, locale);
+      }
+      return key;
     }
 
     const namespace = inferNamespace(key);
     const subkey = extractSubkey(key);
 
     if (!subkey) {
-      recordUsage(key, namespace, locale, 'fallback-string');
+      keyTracker.recordUsage(key, namespace, locale, 'fallback-string');
       if (fallback !== undefined) return interpolate(fallback, params);
       return key;
     }
 
     // Try requested locale
-    const data = store.getResource(locale, namespace);
+    const data = cache.getResource(locale, namespace);
     if (data) {
       const value = resolveKey(data, subkey);
       if (value !== undefined) {
-        recordUsage(key, namespace, locale, 'primary');
+        keyTracker.recordUsage(key, namespace, locale, 'primary');
         return interpolate(value, params);
       }
     }
 
     // Fallback to default locale
     if (locale !== config.defaultLocale) {
-      const fallbackData = store.getResource(config.defaultLocale, namespace);
+      const fallbackData = cache.getResource(config.defaultLocale, namespace);
       if (fallbackData) {
         const value = resolveKey(fallbackData, subkey);
         if (value !== undefined) {
-          recordUsage(key, namespace, locale, 'fallback-locale');
+          keyTracker.recordUsage(key, namespace, locale, 'fallback-locale');
           return interpolate(value, params);
         }
       }
@@ -347,42 +349,15 @@ export function createI18n(config: I18nConfig): I18nInstance {
 
     // Return fallback string or key
     if (fallback !== undefined) {
-      recordUsage(key, namespace, locale, 'fallback-string');
+      keyTracker.recordUsage(key, namespace, locale, 'fallback-string');
       return interpolate(fallback, params);
     }
 
-    recordUsage(key, namespace, locale, 'key-as-value');
-    if (import.meta.env?.DEV && !warnedMissingKeys.has(key)) {
-      warnedMissingKeys.add(key);
-      console.warn(
-        `vite-bundled-i18n: Missing translation for "${key}" in locale "${locale}". Returning key as fallback.`
-      );
+    keyTracker.recordUsage(key, namespace, locale, 'key-as-value');
+    if (!isKeyInLoadingScope(key)) {
+      keyTracker.warnMissing(key, locale);
     }
     return key;
-  }
-
-  /** Records a key lookup for dev diagnostics. */
-  function recordUsage(
-    key: string,
-    namespace: string,
-    locale: string,
-    resolvedFrom: KeyUsageEntry['resolvedFrom'],
-  ): void {
-    keyUsage.push({ key, namespace, locale, resolvedFrom, scope: activeScope });
-  }
-
-  function hasKey(locale: string, key: string): boolean {
-    if (compiledRuntimeActive) {
-      return compiledHasKeyInMap(getCompiledLocaleMap(locale), key);
-    }
-
-    const namespace = inferNamespace(key);
-    const subkey = extractSubkey(key);
-    if (!subkey) return false;
-
-    const data = store.getResource(locale, namespace);
-    if (!data) return false;
-    return resolveKey(data, subkey) !== undefined;
   }
 
   function tryTranslate(
@@ -391,14 +366,20 @@ export function createI18n(config: I18nConfig): I18nInstance {
     params?: Record<string, unknown>,
   ): string | undefined {
     if (compiledRuntimeActive) {
-      return compiledTryTranslateFromMap(getCompiledLocaleMap(locale), key, params);
+      const value = compiledTryTranslateFromMap(getCompiledLocaleMap(locale), key, params);
+      if (value !== undefined) return value;
+      // Fallback to default locale
+      if (locale !== config.defaultLocale) {
+        return compiledTryTranslateFromMap(getCompiledLocaleMap(config.defaultLocale), key, params);
+      }
+      return undefined;
     }
 
     const namespace = inferNamespace(key);
     const subkey = extractSubkey(key);
     if (!subkey) return undefined;
 
-    const data = store.getResource(locale, namespace);
+    const data = cache.getResource(locale, namespace);
     if (data) {
       const value = resolveKey(data, subkey);
       if (value !== undefined) {
@@ -407,7 +388,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
     }
 
     if (locale !== config.defaultLocale) {
-      const fallbackData = store.getResource(config.defaultLocale, namespace);
+      const fallbackData = cache.getResource(config.defaultLocale, namespace);
       if (fallbackData) {
         const value = resolveKey(fallbackData, subkey);
         if (value !== undefined) {
@@ -419,134 +400,21 @@ export function createI18n(config: I18nConfig): I18nInstance {
     return undefined;
   }
 
-  /**
-   * Loads a single named dictionary bundle for a locale.
-   * Fetches `/__i18n/{locale}/_dict/{name}.json` — one HTTP request
-   * containing all namespaces for that dictionary.
-   */
-  async function loadDictionary(locale: string, name: string): Promise<void> {
-    const dictKey = `${locale}:${name}`;
-    if (loadedDicts.has(dictKey)) return;
-
-    const dictConfig = config.dictionaries?.[name];
-    if (!dictConfig) return;
-
-    try {
-      if (compiledRuntimeActive) {
-        const manifest = await getCompiledManifest();
-        const loaded = await loadCompiledModule(locale, manifest?.dictionaries?.[name]?.[locale]);
-        if (loaded) {
-          loadedDicts.add(dictKey);
-          return;
-        }
-      }
-
-      const reqInit = await resolveRequestInit(config.requestInit);
-      const url = config.resolveUrl
-        ? config.resolveUrl(locale, 'dictionary', name)
-        : buildBundlePath(i18nBase, locale, `_dict/${name}`);
-      const bundle = await fetchBundleFromUrl(url, reqInit);
-      for (const [namespace, data] of Object.entries(bundle)) {
-        store.addResources(locale, namespace, data, {
-          source: 'dictionary',
-          pinned: runtimeCache.pinDictionaries,
-        });
-      }
-      loadedDicts.add(dictKey);
-      evictUnused();
-    } catch {
-      handleFetchError();
+  function hasKey(locale: string, key: string): boolean {
+    if (compiledRuntimeActive) {
+      return compiledHasKeyInMap(getCompiledLocaleMap(locale), key);
     }
+
+    const namespace = inferNamespace(key);
+    const subkey = extractSubkey(key);
+    if (!subkey) return false;
+
+    const data = cache.getResource(locale, namespace);
+    if (!data) return false;
+    return resolveKey(data, subkey) !== undefined;
   }
 
-  /**
-   * Loads all configured dictionaries for a locale, in declaration order.
-   * Each dictionary is one HTTP request.
-   */
-  async function loadAllDictionaries(locale: string): Promise<void> {
-    if (!config.dictionaries) return;
-
-    // Load in declaration order, sequentially (priority matters)
-    for (const name of Object.keys(config.dictionaries)) {
-      await loadDictionary(locale, name);
-    }
-  }
-
-  /**
-   * Loads a page/scope bundle for a locale.
-   * Fetches `/__i18n/{locale}/{scope}.json` — one HTTP request
-   * containing all namespaces needed by that page.
-   */
-  async function loadScope(locale: string, scope: string): Promise<void> {
-    const scopeKey = `${locale}:${scope}`;
-    if (loadedScopes.has(scopeKey)) return;
-
-    try {
-      if (compiledRuntimeActive) {
-        const manifest = await getCompiledManifest();
-        const loaded = await loadCompiledModule(locale, manifest?.scopes?.[scope]?.[locale]);
-        if (loaded) {
-          loadedScopes.add(scopeKey);
-          return;
-        }
-      }
-
-      const reqInit = await resolveRequestInit(config.requestInit);
-      const url = config.resolveUrl
-        ? config.resolveUrl(locale, 'scope', scope)
-        : buildBundlePath(i18nBase, locale, scope);
-      const bundle = await fetchBundleFromUrl(url, reqInit);
-      for (const [namespace, data] of Object.entries(bundle)) {
-        store.addResources(locale, namespace, data, {
-          source: 'scope',
-          pinned: false,
-        });
-      }
-      loadedScopes.add(scopeKey);
-      evictUnused();
-    } catch {
-      handleFetchError();
-    }
-  }
-
-  /**
-   * Loads namespace files individually. Kept for testing and non-plugin usage.
-   */
-  async function loadNamespaces(
-    locale: string,
-    namespaces: string[],
-  ): Promise<void> {
-    for (const ns of namespaces) {
-      if (!store.hasNamespace(locale, ns)) {
-        try {
-          const reqInit = await resolveRequestInit(config.requestInit);
-          const nsUrl = config.resolveUrl
-            ? config.resolveUrl(locale, 'namespace', ns)
-            : buildLoadPath(config.localesDir, locale, ns);
-          const data = await fetchNamespaceFromUrl(nsUrl, reqInit);
-          store.addResources(locale, ns, data, {
-            source: 'manual',
-            pinned: false,
-          });
-          evictUnused();
-        } catch {
-          handleFetchError();
-        }
-      }
-    }
-  }
-
-  function addResources(
-    locale: string,
-    namespace: string,
-    data: NestedTranslations,
-  ): void {
-    store.addResources(locale, namespace, data, {
-      source: 'manual',
-      pinned: false,
-    });
-    evictUnused();
-  }
+  // -- Compiled-runtime overlays for getResource / getLoadedNamespaces --------
 
   function getResource(locale: string, namespace: string): NestedTranslations | undefined {
     if (compiledRuntimeActive) {
@@ -575,7 +443,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
       return found ? nested : undefined;
     }
 
-    return store.getResource(locale, namespace);
+    return cache.getResource(locale, namespace);
   }
 
   function getLoadedNamespaces(locale: string): string[] {
@@ -585,20 +453,14 @@ export function createI18n(config: I18nConfig): I18nInstance {
       return [...new Set([...localeMap.keys()].map((key) => inferNamespace(key)))];
     }
 
-    return store.getEntries()
-      .filter((entry) => entry.locale === locale)
-      .map((entry) => entry.namespace);
+    return cache.getLoadedNamespaces(locale);
   }
 
   function isNamespaceLoaded(locale: string, namespace: string): boolean {
     if (compiledRuntimeActive) {
       return getLoadedNamespaces(locale).includes(namespace);
     }
-    return store.hasNamespace(locale, namespace);
-  }
-
-  function isScopeLoaded(locale: string, scope: string): boolean {
-    return loadedScopes.has(`${locale}:${scope}`);
+    return cache.isNamespaceLoaded(locale, namespace);
   }
 
   function getCacheStats() {
@@ -620,27 +482,21 @@ export function createI18n(config: I18nConfig): I18nInstance {
         totalNamespaces,
         approxTotalBytes,
         pinnedNamespaces: 0,
-        loadedScopes: loadedScopes.size,
-        loadedDictionaries: loadedDicts.size,
+        loadedScopes: cache.getCacheStats().loadedScopes,
+        loadedDictionaries: cache.getCacheStats().loadedDictionaries,
       };
     }
 
-    const stats = store.getStats();
-    return {
-      ...stats,
-      loadedScopes: loadedScopes.size,
-      loadedDictionaries: loadedDicts.size,
-    };
+    return cache.getCacheStats();
   }
+
+  // -- Unload with compiled-map cleanup --------------------------------------
 
   function unloadLocale(locale: string): void {
     if (compiledRuntimeActive) {
       compiledLocaleMaps.delete(locale);
-      clearLoadMarkersForLocale(locale);
-      return;
     }
-    store.removeLocale(locale);
-    clearLoadMarkersForLocale(locale);
+    cache.unloadLocale(locale);
   }
 
   function unloadNamespace(locale: string, namespace: string): void {
@@ -653,12 +509,35 @@ export function createI18n(config: I18nConfig): I18nInstance {
           }
         }
       }
-      clearLoadMarkersForNamespace(locale, namespace);
-      return;
     }
-    store.removeNamespace(locale, namespace);
-    clearLoadMarkersForNamespace(locale, namespace);
+    cache.unloadNamespace(locale, namespace);
   }
+
+  // -- changeLocale with compiled-map cleanup --------------------------------
+
+  async function changeLocale(locale: string): Promise<void> {
+    if (compiledRuntimeActive) {
+      // Clear compiled data for the target locale so fresh modules are loaded
+      compiledLocaleMaps.delete(locale);
+    }
+    await localeManager.changeLocale(locale);
+  }
+
+  // -- Public addResources with eviction ------------------------------------
+
+  function addResources(
+    locale: string,
+    namespace: string,
+    data: NestedTranslations,
+  ): void {
+    cache.addResources(locale, namespace, data, {
+      source: 'manual',
+      pinned: false,
+    });
+    cache.evictUnused(localeManager.getLocale());
+  }
+
+  // -- Dictionary namespace helpers ------------------------------------------
 
   function getDictionaryNamespaces(): string[] {
     if (!config.dictionaries) return [];
@@ -682,81 +561,66 @@ export function createI18n(config: I18nConfig): I18nInstance {
     return result;
   }
 
-  function getDictionaryNames(): string[] {
-    if (!config.dictionaries) return [];
-    return Object.keys(config.dictionaries);
-  }
+  // -- HMR wiring ------------------------------------------------------------
 
-  function getLocale(): string {
-    return currentLocale;
-  }
+  const hmrClient = getHmrClient();
 
-  /**
-   * Switches the active locale. Loads all dictionaries and previously
-   * loaded scopes for the new locale before notifying listeners.
-   */
-  async function changeLocale(locale: string): Promise<void> {
-    if (locale === currentLocale) return;
-
-    if (compiledRuntimeActive) {
-      compiledLocaleMaps.delete(locale);
+  const handleDevUpdate = (payload?: I18nDevUpdatePayload) => {
+    const affectedLocales = payload?.locales;
+    if (affectedLocales && affectedLocales.length > 0 && !affectedLocales.includes(localeManager.getLocale())) {
+      return;
     }
 
-    // Load all dictionaries for the new locale (one request per dictionary)
-    await loadAllDictionaries(locale);
+    void localeManager.reloadResources(localeManager.getLocale());
+  };
 
-    // Reload all previously loaded scopes for the new locale
-    const uniqueScopes = new Set<string>();
-    for (const scopeKey of loadedScopes) {
-      const colonIdx = scopeKey.indexOf(':');
-      if (colonIdx !== -1) {
-        uniqueScopes.add(scopeKey.slice(colonIdx + 1));
-      }
-    }
-    await Promise.all(
-      [...uniqueScopes].map((scope) => loadScope(locale, scope)),
-    );
+  hmrClient?.on?.(I18N_DEV_UPDATE_EVENT, handleDevUpdate);
 
-    currentLocale = locale;
-    for (const listener of localeListeners) {
-      listener(locale);
-    }
+  // Test-environment fallback: CustomEvent on window for HMR simulation
+  if (typeof window !== 'undefined' && typeof process !== 'undefined' && process.env?.NODE_ENV === 'test') {
+    window.addEventListener(I18N_DEV_UPDATE_EVENT, (event: Event) => {
+      const customEvent = event as CustomEvent<I18nDevUpdatePayload | undefined>;
+      handleDevUpdate(customEvent.detail);
+    });
   }
 
-  function onLocaleChange(callback: (locale: string) => void): () => void {
-    localeListeners.add(callback);
-    return () => {
-      localeListeners.delete(callback);
-    };
-  }
+  // -- Return I18nInstance ----------------------------------------------------
 
-  function getKeyUsage(): KeyUsageEntry[] {
-    return keyUsage;
-  }
-
-  return {
+  const instance: I18nInstance = {
     config: frozenConfig,
     translate,
     tryTranslate,
     hasKey,
-    loadNamespaces,
-    loadDictionary,
-    loadAllDictionaries,
-    loadScope,
+    loadNamespaces: (locale, namespaces) => loader.loadNamespaces(locale, namespaces),
+    loadDictionary: (locale, name) => loader.loadDictionary(locale, name),
+    loadAllDictionaries: (locale) => loader.loadAllDictionaries(locale),
+    loadScope: (locale, scope) => loader.loadScope(locale, scope),
     addResources,
+    markScopeLoaded: (locale, scope) => cache.markScopeLoaded(locale, scope),
+    markDictionaryLoaded: (locale, name) => cache.markDictionaryLoaded(locale, name),
     getResource,
     getLoadedNamespaces,
+    getLoadedScopes: (locale) => cache.getLoadedScopes(locale),
+    getLoadedDictionaries: (locale) => cache.getLoadedDictionaries(locale),
     isNamespaceLoaded,
-    isScopeLoaded,
+    isScopeLoaded: (locale, scope) => cache.isScopeLoaded(locale, scope),
     getCacheStats,
     unloadLocale,
     unloadNamespace,
-    evictUnused,
+    evictUnused: () => cache.evictUnused(localeManager.getLocale()),
     getDictionaryNamespaces,
-    getDictionaryNames,
-    getLocale,
+    getDictionaryNames: () => config.dictionaries ? Object.keys(config.dictionaries) : [],
+    getLocale: () => localeManager.getLocale(),
     changeLocale,
-    onLocaleChange,
-    getKeyUsage,
+    onLocaleChange: (callback) => localeManager.onLocaleChange(callback),
+    onResourcesChange: (callback) => cache.onResourcesChange(callback),
+    getKeyUsage: () => keyTracker.getKeyUsage(),
+    getResidentKeyCount: (locale) => cache.getResidentKeyCount(locale),
+    registerLoadingScope(scope: string) {
+      loadingScopes.add(scope);
+      return () => { loadingScopes.delete(scope); };
+    },
   };
+
+  return instance;
 }

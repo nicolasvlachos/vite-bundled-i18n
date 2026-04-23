@@ -31,6 +31,12 @@ function getGlobalInstance(): I18nInstance {
   return globalInstance;
 }
 
+/**
+ * Returns a full translator object bound to the global instance and its current locale.
+ *
+ * @returns A {@link Translations} object with `t`, `get`, `has`, `namespace`, etc.
+ * @throws If no global instance has been registered.
+ */
 export function getGlobalTranslations(): Translations {
   const instance = getGlobalInstance();
   return createTranslations(instance, instance.getLocale());

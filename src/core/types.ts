@@ -423,6 +423,18 @@ export interface I18nInstance {
     data: NestedTranslations,
   ) => void;
 
+  /**
+   * Marks a scope as already loaded for a locale without fetching it.
+   * Useful for SSR hydration when the matching scope data is injected into the page.
+   */
+  markScopeLoaded: (locale: string, scope: string) => void;
+
+  /**
+   * Marks a named dictionary as already loaded for a locale without fetching it.
+   * Useful for SSR hydration when dictionary resources are injected into the page.
+   */
+  markDictionaryLoaded: (locale: string, name: string) => void;
+
   /** Returns one namespace's currently loaded resources, if present. */
   getResource: (
     locale: string,
@@ -432,10 +444,16 @@ export interface I18nInstance {
   /** Returns all currently loaded namespace names for a locale. */
   getLoadedNamespaces: (locale: string) => string[];
 
+  /** Returns all loaded scope ids currently resident for a locale. */
+  getLoadedScopes: (locale: string) => string[];
+
+  /** Returns all loaded dictionary names currently resident for a locale. */
+  getLoadedDictionaries: (locale: string) => string[];
+
   /** Returns true when the namespace data is present in the store. */
   isNamespaceLoaded: (locale: string, namespace: string) => boolean;
 
-  /** Returns true when the scope bundle has already been loaded. */
+  /** Returns true when the scope marker exists and the scope's data is present (or the bundle was intentionally empty). */
   isScopeLoaded: (locale: string, scope: string) => boolean;
 
   /** Returns cache and residency information for the runtime store. */
@@ -470,6 +488,12 @@ export interface I18nInstance {
   onLocaleChange: (callback: (locale: string) => void) => () => void;
 
   /**
+   * Subscribes to translation resource updates for the current instance.
+   * Fires after dictionaries, scopes, manual resources, unloads, and dev HMR refreshes.
+   */
+  onResourcesChange: (callback: () => void) => () => void;
+
+  /**
    * Returns all key usage entries recorded since initialization.
    * Only tracks in dev mode. Useful for diagnostics, manifest generation,
    * and the dev toolbar.
@@ -477,9 +501,25 @@ export interface I18nInstance {
   getKeyUsage: () => KeyUsageEntry[];
 
   /**
+   * Returns the count of unique leaf translation keys currently resident
+   * in memory for a locale across all loaded namespaces.
+   */
+  getResidentKeyCount: (locale: string) => number;
+
+  /**
    * Returns the dictionary names in declaration order.
    */
   getDictionaryNames: () => string[];
+
+  /**
+   * Registers a scope as currently loading. Missing-key warnings for keys
+   * belonging to loading scopes are suppressed — calling `t()` before a scope
+   * is ready is an expected transient state, not a real missing translation.
+   *
+   * Returns an unregister function that must be called when the scope finishes
+   * loading (or the component unmounts).
+   */
+  registerLoadingScope: (scope: string) => () => void;
 }
 
 /**

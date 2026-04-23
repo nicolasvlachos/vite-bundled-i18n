@@ -22,17 +22,27 @@ export function applyServerResources(
 }
 
 /**
- * Serializes translation resources into a `<script>` tag for SSR hydration.
+ * Serialize translation resources into a `<script>` tag that sets
+ * `window.__I18N_RESOURCES__` for client-side auto-hydration.
+ *
+ * @param resources - Namespace-keyed translation data
+ * @param locale - Active locale code
+ * @param scopes - Scope ids included in the serialized data
+ * @param dictionaries - Dictionary names included in the serialized data
+ * @returns A safe `<script>` string with escaped JSON
  */
 function serializeResources(
   resources: Record<string, NestedTranslations>,
   locale: string,
+  scopes?: string[],
+  dictionaries?: string[],
 ): string {
-  const json = JSON.stringify({ locale, resources });
+  const json = JSON.stringify({ locale, resources, scopes, dictionaries });
   const safe = json.replace(/</g, '\\u003c');
   return `<script>window.__I18N_RESOURCES__=${safe}</script>`;
 }
 
+/** Extract the root namespace from a scope identifier (e.g. `'products.show'` → `'products'`). */
 function inferScopeNamespace(scope: string): string {
   return scope.includes('.') ? scope.slice(0, scope.indexOf('.')) : scope;
 }
@@ -80,7 +90,12 @@ export async function initServerI18n(
 
   return {
     translations: createTranslations(instance, activeLocale),
-    scriptTag: serializeResources(resources, activeLocale),
+    scriptTag: serializeResources(
+      resources,
+      activeLocale,
+      scope ? [scope] : [],
+      instance.getDictionaryNames(),
+    ),
     instance,
   };
 }

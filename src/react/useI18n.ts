@@ -44,38 +44,44 @@ export function useI18n(scope?: ValidScope): UseI18nResult {
     );
   }
 
-  const { instance, version } = ctx;
+  const { instance, version, dictsReady } = ctx;
   const locale = instance.getLocale();
-  const [scopeReady, setScopeReady] = useState(() => {
-    if (!scope) return true;
-    return instance.isScopeLoaded(locale, scope);
-  });
-  const [loadedScopeKey, setLoadedScopeKey] = useState<string | null>(null);
+  const scopeReady = !scope || instance.isScopeLoaded(locale, scope);
+  const [, setScopeVersion] = useState(0);
 
   // Load scope bundle if needed — one HTTP request per scope
-  const scopeKey = scope ? `${locale}:${scope}` : null;
   useEffect(() => {
-    if (!scopeKey || !scope) return;
-    if (scopeKey === loadedScopeKey) return;
+    if (!scope || scopeReady) return;
 
     let cancelled = false;
-    instance.loadScope(locale, scope).then(() => {
-      if (!cancelled) {
-        setLoadedScopeKey(scopeKey);
-        setScopeReady(true);
+    const requestLocale = locale;
+
+    instance.loadScope(requestLocale, scope).then(() => {
+      if (!cancelled && instance.getLocale() === requestLocale) {
+        setScopeVersion((v) => v + 1);
       }
     });
 
     return () => { cancelled = true; };
-  }, [scopeKey, scope, locale, instance, loadedScopeKey]);
+  }, [scope, scopeReady, locale, instance]);
+
+  // Suppress missing-key warnings for this scope while it's loading.
+  // Each hook instance registers its own scope — no global state conflicts.
+  useEffect(() => {
+    if (!scope || scopeReady) return;
+    return instance.registerLoadingScope(scope);
+  }, [scope, scopeReady, instance]);
+
+  const ready = dictsReady && scopeReady;
 
   // Re-create the translator object whenever locale or loaded resources change.
   const translations = useMemo(
     () => createTranslations(instance, locale),
     // version is not read directly here, but it must participate so the
-    // translator object is recreated after dictionary/scope loads.
+    // translator object is recreated after dictionary loads and scope-ready
+    // transitions, including cache hits on remount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [instance, locale, version],
+    [instance, locale, version, scopeReady],
   );
 
   return {
@@ -86,7 +92,7 @@ export function useI18n(scope?: ValidScope): UseI18nResult {
     tryGet: translations.tryGet,
     require: translations.require,
     translations,
-    ready: scopeReady,
+    ready,
     locale,
   };
 }

@@ -6,8 +6,7 @@
  * — no namespace inference, no dot-path traversal, no fallback chain.
  */
 
-/** Matches `{{key}}` and `{{ key }}` placeholders (whitespace-tolerant). */
-const PLACEHOLDER = /\{\{\s*(\w+)\s*\}\}/g;
+import { interpolate } from './interpolator';
 
 let currentMap: Map<string, string> = new Map();
 
@@ -69,6 +68,13 @@ export function compiledHasKey(key: string): boolean {
   return currentMap.has(key);
 }
 
+/**
+ * Attempts to translate a key from the current compiled map without fallback.
+ *
+ * @param key - The dot-path translation key to look up.
+ * @param params - Optional placeholder replacement values.
+ * @returns The translated string, or `undefined` if the key is not found.
+ */
 export function compiledTryTranslate(
   key: string,
   params?: Record<string, unknown>,
@@ -76,6 +82,13 @@ export function compiledTryTranslate(
   return compiledTryTranslateFromMap(currentMap, key, params);
 }
 
+/**
+ * Checks whether a key exists in the given compiled translation map.
+ *
+ * @param map - The compiled translation map to search.
+ * @param key - The dot-path translation key to check.
+ * @returns `true` if the key exists in the map.
+ */
 export function compiledHasKeyInMap(
   map: CompiledTranslationMap,
   key: string,
@@ -83,6 +96,14 @@ export function compiledHasKeyInMap(
   return map.has(key);
 }
 
+/**
+ * Attempts to translate a key from a specific compiled map without fallback.
+ *
+ * @param map - The compiled translation map to search.
+ * @param key - The dot-path translation key to look up.
+ * @param params - Optional placeholder replacement values.
+ * @returns The translated string, or `undefined` if the key is not found.
+ */
 export function compiledTryTranslateFromMap(
   map: CompiledTranslationMap,
   key: string,
@@ -119,6 +140,18 @@ export function compiledTranslate(
   return compiledTranslateFromMap(currentMap, key, params, fallback);
 }
 
+/**
+ * Resolves a translation key from a specific compiled map, with fallback.
+ *
+ * Behaves identically to {@link compiledTranslate} but operates on an
+ * explicitly provided map instead of the module-level current map.
+ *
+ * @param map - The compiled translation map to search.
+ * @param key - The dot-path translation key to look up.
+ * @param params - Optional placeholder replacement values.
+ * @param fallback - Optional fallback string when the key is missing.
+ * @returns The resolved (and optionally interpolated) string.
+ */
 export function compiledTranslateFromMap(
   map: CompiledTranslationMap,
   key: string,
@@ -138,6 +171,15 @@ export function compiledTranslateFromMap(
   return key;
 }
 
+/**
+ * Dynamically imports a compiled manifest module from a URL.
+ *
+ * Uses `new Function` to perform a true dynamic `import()` that bypasses
+ * bundler static analysis, allowing the URL to be resolved at runtime.
+ *
+ * @param url - The URL of the compiled manifest module.
+ * @returns The loaded manifest containing scope and dictionary loaders.
+ */
 export async function loadCompiledManifest(
   url: string,
 ): Promise<CompiledManifestModule> {
@@ -147,18 +189,3 @@ export async function loadCompiledManifest(
   return dynamicImport(url);
 }
 
-/**
- * Replaces all `{{placeholder}}` tokens in `text` with values from `params`.
- *
- * Tokens whose name is absent from `params` are left as-is. Matched values
- * are coerced to strings via `String()`.
- *
- * @param text   - The template string containing zero or more placeholders.
- * @param params - The parameter map supplying replacement values.
- */
-function interpolate(text: string, params: Record<string, unknown>): string {
-  return text.replace(PLACEHOLDER, (match, key: string) => {
-    const value = params[key];
-    return value !== undefined ? String(value) : match;
-  });
-}

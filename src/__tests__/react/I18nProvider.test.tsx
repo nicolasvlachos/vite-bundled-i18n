@@ -5,6 +5,7 @@ import { createI18n } from '../../core/createI18n';
 import { I18nProvider } from '../../react/I18nProvider';
 import { useContext } from 'react';
 import { I18nContext } from '../../react/context';
+import { useI18n } from '../../react/useI18n';
 import type { I18nInstance } from '../../core/types';
 
 function ContextReader() {
@@ -110,6 +111,40 @@ describe('I18nProvider', () => {
 
     // Clean up in case test fails
     delete (window as unknown as Record<string, unknown>).__I18N_RESOURCES__;
+  });
+
+  it('marks hydrated scopes as loaded from window data', async () => {
+    const { vi } = await import('vitest');
+    globalThis.fetch = vi.fn();
+
+    (window as unknown as Record<string, unknown>).__I18N_RESOURCES__ = {
+      locale: 'en',
+      resources: { quizzes: { show: { title: 'Quiz from server' } } },
+      scopes: ['quizzes.show'],
+    };
+
+    const autoInstance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+    });
+
+    function Consumer() {
+      const { t, ready } = useI18n('quizzes.show');
+      return <span data-testid="hydrated-scope">{ready ? t('quizzes.show.title', 'Fallback') : 'loading'}</span>;
+    }
+
+    render(
+      <I18nProvider instance={autoInstance}>
+        <Consumer />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByTestId('hydrated-scope').textContent).toBe('Quiz from server');
+    expect(autoInstance.isScopeLoaded('en', 'quizzes.show')).toBe(true);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect((window as unknown as Record<string, unknown>).__I18N_RESOURCES__).toBeUndefined();
   });
 
   it('still loads dictionaries when serverResources is not provided', () => {

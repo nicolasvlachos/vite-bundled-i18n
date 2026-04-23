@@ -28,12 +28,25 @@ export function createI18nPlugin(instance: I18nInstance): Plugin {
     install(app) {
       // Auto-hydrate from server-injected global
       const win = typeof window !== 'undefined'
-        ? (window as Window & { __I18N_RESOURCES__?: { locale: string; resources: Record<string, NestedTranslations> } })
+        ? (window as Window & {
+          __I18N_RESOURCES__?: {
+            locale: string;
+            resources: Record<string, NestedTranslations>;
+            scopes?: string[];
+            dictionaries?: string[];
+          };
+        })
         : undefined;
       if (win?.__I18N_RESOURCES__) {
         const serverData = win.__I18N_RESOURCES__;
         for (const [namespace, data] of Object.entries(serverData.resources)) {
           instance.addResources(serverData.locale, namespace, data);
+        }
+        for (const scope of serverData.scopes ?? []) {
+          instance.markScopeLoaded(serverData.locale, scope);
+        }
+        for (const dictionary of serverData.dictionaries ?? []) {
+          instance.markDictionaryLoaded(serverData.locale, dictionary);
         }
         delete win.__I18N_RESOURCES__;
       }
@@ -75,7 +88,7 @@ export function useI18n(scope?: string): UseI18nReturn {
 
   const locale = ref(instance.getLocale());
   const hasDicts = instance.getDictionaryNames().length > 0;
-  const ready = ref(!scope && !hasDicts);
+  const ready = ref(computeReady());
 
   function makeTranslations() {
     return createTranslations(instance, locale.value);
@@ -87,11 +100,17 @@ export function useI18n(scope?: string): UseI18nReturn {
     translations.value = makeTranslations();
   }
 
-  let unsub: (() => void) | undefined;
+  let unsubLocale: (() => void) | undefined;
+  let unsubResources: (() => void) | undefined;
 
   onMounted(() => {
-    unsub = instance.onLocaleChange((newLocale) => {
+    unsubLocale = instance.onLocaleChange((newLocale) => {
       locale.value = newLocale;
+      ready.value = computeReady();
+      refresh();
+    });
+    unsubResources = instance.onResourcesChange(() => {
+      ready.value = computeReady();
       refresh();
     });
 
@@ -106,14 +125,15 @@ export function useI18n(scope?: string): UseI18nReturn {
 
     if (promises.length > 0) {
       Promise.all(promises).then(() => {
-        ready.value = true;
+        ready.value = computeReady();
         refresh();
       });
     }
   });
 
   onUnmounted(() => {
-    unsub?.();
+    unsubLocale?.();
+    unsubResources?.();
   });
 
   const t: TFunction = ((key: string, ...args: unknown[]) => {
@@ -136,6 +156,13 @@ export function useI18n(scope?: string): UseI18nReturn {
     return result;
   }) as RequireTFunction;
 
+  function computeReady(): boolean {
+    const dictReady = !hasDicts
+      || instance.getDictionaryNames().every((name) => instance.getLoadedDictionaries(locale.value).includes(name));
+    const scopeReady = !scope || instance.isScopeLoaded(locale.value, scope);
+    return dictReady && scopeReady;
+  }
+
   return {
     t,
     get: t,
@@ -155,6 +182,7 @@ export { defineI18nConfig } from './core/config';
 export { defineI18nData, i18nKey } from './core/data';
 export { t, hasKey, scopedT, setGlobalInstance } from './core/t';
 export { getTranslations } from './core/getTranslations';
+export { mountI18nDevtools } from './devtools/mountDevtools';
 
 // Types
 export type {
@@ -173,3 +201,7 @@ export type {
   ScopedTFunction,
   KeyUsageEntry,
 } from './core/types';
+export type {
+  I18nDevtoolsHandle,
+  I18nDevtoolsOptions,
+} from './devtools/mountDevtools';

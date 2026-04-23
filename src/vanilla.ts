@@ -10,6 +10,7 @@ export { defineI18nConfig } from './core/config';
 export { defineI18nData, i18nKey } from './core/data';
 export { t, hasKey, scopedT, setGlobalInstance } from './core/t';
 export { getTranslations } from './core/getTranslations';
+export { mountI18nDevtools } from './devtools/mountDevtools';
 export { initServerI18n } from './server';
 
 // Compiled runtime
@@ -39,16 +40,24 @@ export type {
   UseI18nResult,
   KeyUsageEntry,
 } from './core/types';
+export type {
+  I18nDevtoolsHandle,
+  I18nDevtoolsOptions,
+} from './devtools/mountDevtools';
 
 import { createI18n } from './core/createI18n';
 import { setGlobalInstance } from './core/t';
+import { mountI18nDevtools } from './devtools/mountDevtools';
 import { applyServerResources } from './server';
 import type { I18nConfig, I18nInstance, NestedTranslations } from './core/types';
 
 export interface InitI18nOptions {
   serverResources?: Record<string, NestedTranslations>;
+  serverScopes?: string[];
+  serverDictionaries?: string[];
   scope?: string;
   setGlobal?: boolean;
+  devtools?: boolean;
 }
 
 /**
@@ -83,11 +92,22 @@ export async function initI18n(
   }
   if (options?.serverResources) {
     applyServerResources(instance, options.serverResources, config.locale);
+    for (const scope of options.serverScopes ?? []) {
+      instance.markScopeLoaded(config.locale, scope);
+    }
+    for (const dictionary of options.serverDictionaries ?? []) {
+      instance.markDictionaryLoaded(config.locale, dictionary);
+    }
   } else {
     await instance.loadAllDictionaries(config.locale);
   }
   if (options?.scope) {
     await instance.loadScope(config.locale, options.scope);
+  }
+  if (options?.devtools) {
+    mountI18nDevtools(instance, {
+      getCurrentScope: () => options.scope,
+    });
   }
   return instance;
 }
