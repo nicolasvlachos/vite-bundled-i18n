@@ -43,7 +43,7 @@ export function extractKeys(
   }
 
   const keys = findTranslationCalls(sourceFile, opts);
-  const scopes = extractScopes(sourceFile);
+  const scopes = extractScopes(sourceFile, opts.hookSources);
   const imports = collectImports(sourceFile);
 
   return {

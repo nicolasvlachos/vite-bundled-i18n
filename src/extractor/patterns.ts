@@ -22,24 +22,41 @@ const PACKAGE_NAMES = new Set([
 
 /**
  * Package specifiers recognized as ours.
+ *
+ * @param specifier - The import module specifier to check.
+ * @param hookSources - Additional module specifiers configured via `extraction.hookSources`.
  */
-function isOurPackage(specifier: string): boolean {
+function isOurPackage(specifier: string, hookSources?: string[]): boolean {
   return (
     PACKAGE_NAMES.has(specifier) ||
     specifier.includes('/core/t') ||
-    specifier.includes('/react/useI18n')
+    specifier.includes('/react/useI18n') ||
+    matchesHookSource(specifier, hookSources)
   );
 }
 
 /**
- * Checks if a module specifier is one that exports `useI18n`.
+ * Checks if a module specifier exports `useI18n`.
+ *
+ * @param specifier - The import module specifier to check.
+ * @param hookSources - Additional module specifiers configured via `extraction.hookSources`.
  */
-function isUseI18nPackage(specifier: string): boolean {
+function isUseI18nPackage(specifier: string, hookSources?: string[]): boolean {
   return (
     specifier === 'vite-bundled-i18n/react' ||
     specifier === 'vite-i18n-manager/react' ||
-    specifier.includes('/react/useI18n')
+    specifier.includes('/react/useI18n') ||
+    matchesHookSource(specifier, hookSources)
   );
+}
+
+/**
+ * Checks if a specifier matches any configured hook source.
+ * Uses exact match or endsWith to handle path alias resolution.
+ */
+function matchesHookSource(specifier: string, hookSources?: string[]): boolean {
+  if (!hookSources || hookSources.length === 0) return false;
+  return hookSources.some(source => specifier === source || specifier.endsWith(source));
 }
 
 /**
@@ -104,7 +121,7 @@ export function findTranslationCalls(
     if (!ts.isImportDeclaration(node)) return;
     if (!ts.isStringLiteral(node.moduleSpecifier)) return;
     const specifier = node.moduleSpecifier.text;
-    if (!isOurPackage(specifier)) return;
+    if (!isOurPackage(specifier, options.hookSources)) return;
 
     const clause = node.importClause;
     if (!clause) return;
@@ -121,11 +138,11 @@ export function findTranslationCalls(
         }
       }
 
-      if (importedName === 'useI18n' && isUseI18nPackage(specifier)) {
+      if (importedName === 'useI18n' && isUseI18nPackage(specifier, options.hookSources)) {
         useI18nNames.add(localName);
       }
 
-      if (importedName === 'i18nKey' && isOurPackage(specifier)) {
+      if (importedName === 'i18nKey' && isOurPackage(specifier, options.hookSources)) {
         i18nKeyNames.add(localName);
       }
     }
@@ -400,8 +417,11 @@ export function findTranslationCalls(
 
 /**
  * Extracts scope strings from all useI18n() calls in a source file.
+ *
+ * @param sourceFile - The parsed TypeScript source file.
+ * @param hookSources - Additional module specifiers that export `useI18n`.
  */
-export function extractScopes(sourceFile: ts.SourceFile): string[] {
+export function extractScopes(sourceFile: ts.SourceFile, hookSources?: string[]): string[] {
   const scopes: string[] = [];
 
   // First check that useI18n is actually imported from our package
@@ -411,7 +431,7 @@ export function extractScopes(sourceFile: ts.SourceFile): string[] {
     if (!ts.isImportDeclaration(node)) return;
     if (!ts.isStringLiteral(node.moduleSpecifier)) return;
     const specifier = node.moduleSpecifier.text;
-    if (!isUseI18nPackage(specifier)) return;
+    if (!isUseI18nPackage(specifier, hookSources)) return;
 
     const clause = node.importClause;
     if (!clause) return;

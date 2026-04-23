@@ -95,6 +95,7 @@ export function emitI18nBuildArtifacts(
     localesDir,
     defaultLocale: buildConfig.defaultLocale,
     extractionScope,
+    hookSources: sharedConfig.extraction?.hookSources,
   });
 
   const bundles = generateBundles(analysis, {

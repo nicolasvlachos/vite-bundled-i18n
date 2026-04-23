@@ -95,6 +95,7 @@ export function buildDevDiagnostics(
     localesDir,
     defaultLocale: options.defaultLocale,
     extractionScope: options.extractionScope ?? 'global',
+    hookSources: options.sharedConfig.extraction?.hookSources,
   });
   const availableKeys = flattenLocaleKeys(localesDir, options.defaultLocale);
   const allAvailableKeys = [...availableKeys.entries()].flatMap(([namespace, keys]) =>

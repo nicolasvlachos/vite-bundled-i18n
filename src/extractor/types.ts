@@ -12,6 +12,8 @@ export interface ExtractionOptions {
   filePath: string;
   /** Additional property names to scan as translation key fields. Additive to defaults. */
   keyFields?: string[];
+  /** Additional module specifiers that export `useI18n`. */
+  hookSources?: string[];
 }
 
 /**

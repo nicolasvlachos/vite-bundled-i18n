@@ -18,6 +18,22 @@ export interface I18nSharedConfig {
   extraction?: {
     /** Additional property names to scan as translation key fields. */
     keyFields?: string[];
+    /**
+     * Additional module specifiers that export `useI18n`.
+     *
+     * The extractor only recognizes `useI18n` imported from `vite-bundled-i18n/react`
+     * by default. If your app wraps `useI18n` in a custom hook that re-exports it
+     * from a different path, add that path here so the extractor can trace scope
+     * declarations and `t()` calls through the wrapper.
+     *
+     * @example
+     * ```ts
+     * extraction: {
+     *   hookSources: ['@/hooks/use-page-i18n-scope'],
+     * }
+     * ```
+     */
+    hookSources?: string[];
   };
 }
 

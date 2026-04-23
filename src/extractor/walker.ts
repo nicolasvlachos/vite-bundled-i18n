@@ -174,7 +174,7 @@ export function discoverNamespaces(
  */
 export function walkRoute(
   entryPoint: string,
-  options: { rootDir: string; extractionScope: 'global' | 'scoped' },
+  options: { rootDir: string; extractionScope: 'global' | 'scoped'; hookSources?: string[] },
 ): RouteAnalysis {
   const visited = new Set<string>();
   const allKeys: ExtractedKey[] = [];
@@ -201,6 +201,7 @@ export function walkRoute(
     const result = extractKeys(source, {
       scope: options.extractionScope,
       filePath: resolved,
+      hookSources: options.hookSources,
     });
 
     for (const key of result.keys) {
@@ -248,7 +249,7 @@ export function walkAll(options: WalkerOptions): ProjectAnalysis {
 
   // Walk each route
   const routes = entryFiles.map((entry) =>
-    walkRoute(entry, { rootDir, extractionScope }),
+    walkRoute(entry, { rootDir, extractionScope, hookSources: options.hookSources }),
   );
 
   // Discover namespaces

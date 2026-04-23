@@ -14,6 +14,8 @@ export interface WalkerOptions {
   defaultLocale: string;
   /** Extraction scope mode. Default: 'global'. */
   extractionScope?: 'global' | 'scoped';
+  /** Additional module specifiers that export `useI18n`. */
+  hookSources?: string[];
 }
 
 /**

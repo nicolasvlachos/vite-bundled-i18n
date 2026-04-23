@@ -27,6 +27,8 @@ export interface CliConfig {
   extractionScope?: 'global' | 'scoped';
   /** Optional dictionary configurations for compiled mode. */
   dictionaries?: Record<string, DictionaryConfig>;
+  /** Additional module specifiers that export `useI18n`. */
+  hookSources?: string[];
 }
 
 function resolveConfig(config: CliConfig) {
@@ -51,6 +53,7 @@ function runWalker(config: CliConfig): ProjectAnalysis {
     localesDir,
     defaultLocale: config.defaultLocale,
     extractionScope,
+    hookSources: config.hookSources,
   });
 }
 

@@ -160,4 +160,34 @@ describe('extractKeys', () => {
       'global.nav.cart',
     ]);
   });
+
+  it('extracts scopes and keys from custom hookSources', () => {
+    const result = extractKeys(`
+      import { useI18n } from '@/hooks/use-page-i18n-scope';
+      function QuizzesPage() {
+        const { t, ready } = useI18n('quizzes.index');
+        if (!ready) return null;
+        return <h1>{t('quizzes.index.title', 'Quizzes')}</h1>;
+      }
+    `, {
+      hookSources: ['@/hooks/use-page-i18n-scope'],
+    });
+    expect(result.scopes).toEqual(['quizzes.index']);
+    expect(result.keys).toHaveLength(1);
+    expect(result.keys[0].key).toBe('quizzes.index.title');
+  });
+
+  it('does not extract scopes from unknown imports without hookSources', () => {
+    const result = extractKeys(`
+      import { useI18n } from '@/hooks/use-page-i18n-scope';
+      function QuizzesPage() {
+        const { t } = useI18n('quizzes.index');
+        return <h1>{t('quizzes.index.title')}</h1>;
+      }
+    `);
+    // Without hookSources, the custom import is not recognized
+    expect(result.scopes).toEqual([]);
+    // t() is still picked up by the untracked callee fallback (global mode)
+    expect(result.keys).toHaveLength(1);
+  });
 });
