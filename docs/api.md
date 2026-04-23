@@ -124,14 +124,16 @@ compiled: {
 }
 ```
 
-### `instance.registerLoadingScope(scope)`
+### `instance.addLoadingScope(scope)` / `instance.removeLoadingScope(scope)`
 
-Registers a scope as currently loading. Returns an unregister function that must be called when the scope finishes loading (or the component unmounts). Used internally by `useI18n()` — call it directly when building custom scope-loading logic outside of React/Vue.
+Marks a scope as currently loading / finished loading. While a scope is in the loading set, missing-key warnings for keys in that scope's namespace are suppressed. Used internally by `useI18n()` — call directly when building custom scope-loading logic outside of React/Vue.
+
+`addLoadingScope` is idempotent (safe to call during React render). `removeLoadingScope` should be called in cleanup (effect teardown, `onUnmounted`, etc.).
 
 ```ts
-const unregister = i18n.registerLoadingScope('products.index')
+i18n.addLoadingScope('products.index')
 // ...after scope loaded or component unmounted:
-unregister()
+i18n.removeLoadingScope('products.index')
 ```
 
 ### `instance.changeLocale(locale)`
@@ -437,7 +439,8 @@ Main instance methods:
 - `getKeyUsage()`
 - `getResource(locale, namespace)`
 - `getResidentKeyCount(locale)` — returns the total number of translation keys currently held in memory for the given locale across all loaded namespaces
-- `registerLoadingScope(scope)` — registers a scope as actively loading; returns an unregister callback. Used internally by framework adapters; call directly for custom loading logic.
+- `addLoadingScope(scope)` — marks a scope as loading (suppresses warnings for its namespace). Idempotent, render-safe.
+- `removeLoadingScope(scope)` — removes a scope from the loading set. Call in cleanup.
 
 ## Vite Plugin
 

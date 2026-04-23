@@ -1,7 +1,7 @@
 {
   "name": "vite-bundled-i18n",
   "private": false,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Route-aware i18n bundler for Vite. Translations are AST-extracted, tree-shaken per page, and shipped as scope-matched bundles — not loaded globally.",
   "type": "module",
   "types": "./dist/index.d.ts",
@@ -31,8 +31,7 @@
     "access": "public"
   },
   "dependencies": {
-    "tinyglobby": "^0.2.16",
-    "typescript": "~6.0.3"
+    "tinyglobby": "^0.2.16"
   },
   "files": [
     "dist/**/*.js",
@@ -114,6 +113,7 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "tsx": "^4.21.0",
+    "typescript": "~6.0.3",
     "typescript-eslint": "^8.58.0",
     "vite": "^8.0.4",
     "vitest": "^4.1.4",

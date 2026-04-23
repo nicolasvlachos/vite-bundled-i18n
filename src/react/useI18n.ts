@@ -66,10 +66,20 @@ export function useI18n(scope?: ValidScope): UseI18nResult {
   }, [scope, scopeReady, locale, instance]);
 
   // Suppress missing-key warnings for this scope while it's loading.
-  // Each hook instance registers its own scope — no global state conflicts.
+  // addLoadingScope is idempotent (Set.add) and safe to call during render —
+  // this ensures t() calls in useMemo during the same render cycle are covered.
+  // The cleanup runs in an effect since effects fire after paint.
+  if (scope && !scopeReady) {
+    instance.addLoadingScope(scope);
+  }
+
   useEffect(() => {
-    if (!scope || scopeReady) return;
-    return instance.registerLoadingScope(scope);
+    if (!scope || scopeReady) {
+      // Scope loaded or no scope — remove from loading set
+      if (scope) instance.removeLoadingScope(scope);
+      return;
+    }
+    return () => { instance.removeLoadingScope(scope); };
   }, [scope, scopeReady, instance]);
 
   const ready = dictsReady && scopeReady;

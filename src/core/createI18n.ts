@@ -3,7 +3,6 @@ import { resolveKey, inferNamespace, extractSubkey } from './resolver';
 import { interpolate } from './interpolator';
 import {
   compiledHasKeyInMap,
-
   compiledTryTranslateFromMap,
   loadCompiledManifest,
   type CompiledManifestModule,
@@ -616,9 +615,11 @@ export function createI18n(config: I18nConfig): I18nInstance {
     onResourcesChange: (callback) => cache.onResourcesChange(callback),
     getKeyUsage: () => keyTracker.getKeyUsage(),
     getResidentKeyCount: (locale) => cache.getResidentKeyCount(locale),
-    registerLoadingScope(scope: string) {
+    addLoadingScope(scope: string) {
       loadingScopes.add(scope);
-      return () => { loadingScopes.delete(scope); };
+    },
+    removeLoadingScope(scope: string) {
+      loadingScopes.delete(scope);
     },
   };
 

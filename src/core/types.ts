@@ -512,14 +512,21 @@ export interface I18nInstance {
   getDictionaryNames: () => string[];
 
   /**
-   * Registers a scope as currently loading. Missing-key warnings for keys
+   * Marks a scope as currently loading. Missing-key warnings for keys
    * belonging to loading scopes are suppressed — calling `t()` before a scope
    * is ready is an expected transient state, not a real missing translation.
    *
-   * Returns an unregister function that must be called when the scope finishes
-   * loading (or the component unmounts).
+   * Idempotent — safe to call during React render (no side effects beyond
+   * a Set.add). Use {@link removeLoadingScope} in an effect cleanup.
    */
-  registerLoadingScope: (scope: string) => () => void;
+  addLoadingScope: (scope: string) => void;
+
+  /**
+   * Removes a scope from the loading set. Warnings for keys in that scope's
+   * namespace will resume. Call this in effect cleanup or when the scope
+   * finishes loading.
+   */
+  removeLoadingScope: (scope: string) => void;
 }
 
 /**
