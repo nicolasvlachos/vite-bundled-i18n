@@ -91,6 +91,28 @@ export interface I18nSharedConfig {
      * ```
      */
     dynamicKeys?: readonly string[];
+    /** Dev-server bundle shape. Build output is always tree-shaken. */
+    dev?: {
+      /**
+       * Tree-shake dev bundles using the walker's extraction data.
+       *
+       * When `true` (default), each dev scope-bundle response contains only
+       * the keys the route's AST extraction found — same shape as the
+       * production build. Matches prod semantics and keeps per-scope payloads
+       * small on large apps (typically 10× to 20× smaller than the full
+       * namespace).
+       *
+       * When `false`, falls back to the v0.6.0 behavior of shipping the
+       * whole namespace (plus any full cross-ns extras). Kept for escape
+       * hatch — properly-structured apps should leave the default on.
+       *
+       * Falls back to full namespaces automatically when `options.pages`
+       * isn't configured (no analysis available).
+       *
+       * @default true
+       */
+      leanBundles?: boolean;
+    };
   };
 }
 

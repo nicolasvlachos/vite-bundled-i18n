@@ -220,8 +220,11 @@ describe('i18nDevPlugin', () => {
     });
   });
 
-  it('includes cross-namespace extras in the scope bundle response when crossNamespacePacking is on', () => {
-    // Add a vendors namespace + a giftcards.show page that references it.
+  it('tree-shakes cross-namespace extras in dev by default (lean bundles)', () => {
+    // Add a vendors namespace + a giftcards.show page that references
+    // one of vendors' keys. With lean-bundle mode on (default), the dev
+    // response should contain only the extracted keys — matches prod
+    // tree-shaking, drops the noise.
     fs.writeFileSync(
       path.join(tmpDir, 'locales/en/vendors.json'),
       JSON.stringify({ compact: { name: 'Vendor' }, full: { bio: 'Bio' } }),
@@ -252,8 +255,61 @@ describe('i18nDevPlugin', () => {
     expect(next).not.toHaveBeenCalled();
     const body = JSON.parse(response.body);
     expect(body.giftcards).toEqual({ show: { title: 'Gift card' } });
-    // Extras namespace is included (full data — dev doesn't tree-shake).
+    // Only the extracted cross-ns key ships — `vendors.full.bio` is
+    // tree-shaken out even though the namespace file contains it.
+    expect(body.vendors).toEqual({ compact: { name: 'Vendor' } });
+  });
+
+  it('falls back to full namespace data when bundling.dev.leanBundles is explicitly false', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/vendors.json'),
+      JSON.stringify({ compact: { name: 'Vendor' }, full: { bio: 'Bio' } }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/giftcards.json'),
+      JSON.stringify({ show: { title: 'Gift card' } }),
+    );
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/giftcards'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/giftcards/show.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function GiftcardShow() {',
+        "  const { t } = useI18n('giftcards.show');",
+        "  return <div>{t('giftcards.show.title')}{t('vendors.compact.name')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+
+    const { middleware } = createPluginHarness(
+      { pages: ['src/pages/**/*.tsx'], defaultLocale: 'en' },
+      undefined,
+      { bundling: { crossNamespacePacking: true, dev: { leanBundles: false } } },
+    );
+    const { response } = runMiddleware(middleware, '/__i18n/en/giftcards.show.json');
+
+    const body = JSON.parse(response.body);
+    // Opt-out returns the whole namespace — matches v0.6.0 behavior.
     expect(body.vendors).toEqual({ compact: { name: 'Vendor' }, full: { bio: 'Bio' } });
+  });
+
+  it('falls back to full namespace when the requested scope has no plan (unknown scope safety net)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/orphan.json'),
+      JSON.stringify({ title: 'Orphan', subtitle: 'Not extracted' }),
+    );
+
+    // No page declares `useI18n('orphan.whatever')` — so no plan exists
+    // for this scope. Lean mode should fall through to the full namespace
+    // rather than serving an empty bundle.
+    const { middleware } = createPluginHarness({
+      pages: ['src/pages/**/*.tsx'],
+      defaultLocale: 'en',
+    });
+    const { response } = runMiddleware(middleware, '/__i18n/en/orphan.whatever.json');
+
+    const body = JSON.parse(response.body);
+    expect(body.orphan).toEqual({ title: 'Orphan', subtitle: 'Not extracted' });
   });
 
   it('serves /__i18n/scope-map.json with page entries derived from pages glob', () => {
@@ -372,7 +428,10 @@ describe('i18nDevPlugin', () => {
         "import { useI18n } from 'vite-bundled-i18n/react';",
         'export function GiftcardShow() {',
         "  const { t } = useI18n('giftcards.show');",
-        "  return <div>{t('vendors.compact.name')}</div>;",
+        // Reference a key in the primary namespace so lean tree-shake has
+        // something to emit. The cross-ns vendor key is intentionally
+        // present in the source but (with packing off) shouldn't ship.
+        "  return <div>{t('giftcards.show.title')}{t('vendors.compact.name')}</div>;",
         '}',
       ].join('\n'),
     );
@@ -384,7 +443,7 @@ describe('i18nDevPlugin', () => {
     const { response } = runMiddleware(middleware, '/__i18n/en/giftcards.show.json');
 
     const body = JSON.parse(response.body);
-    expect(body.giftcards).toBeDefined();
+    expect(body.giftcards).toEqual({ show: { title: 'Gift card' } });
     expect(body.vendors).toBeUndefined();
   });
 
@@ -452,10 +511,13 @@ describe('i18nDevPlugin', () => {
       global: { appName: 'Store' },
       shared: { ok: 'OK', loading: 'Loading...', secret: 'Classified' },
     });
+    // Lean-bundle mode (default) tree-shakes `show.title` because only
+    // `products.index.heading` is extracted across the routes using the
+    // products namespace. Matches prod tree-shaking — not the v0.6.0
+    // full-namespace behavior.
     expect(JSON.parse(fs.readFileSync(path.join(harness.publicAssetsDir, 'en/_scope/products.json'), 'utf-8'))).toEqual({
       products: {
         index: { heading: 'All Products' },
-        show: { title: 'Product Details' },
       },
     });
 
@@ -482,10 +544,11 @@ describe('i18nDevPlugin', () => {
     );
     harness.trigger('change', path.join(tmpDir, 'locales/en/products.json'));
 
+    // Tree-shaken: only `products.index.heading` is extracted; the refresh
+    // regenerates the lean shape with the new value.
     expect(JSON.parse(fs.readFileSync(path.join(harness.publicAssetsDir, 'en/_scope/products.json'), 'utf-8'))).toEqual({
       products: {
         index: { heading: 'Updated Products' },
-        show: { title: 'Product Details' },
       },
     });
     expect(harness.wsSend).toHaveBeenCalledWith({

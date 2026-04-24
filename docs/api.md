@@ -10,6 +10,8 @@ Public subpaths:
 - `vite-bundled-i18n/vue`
 - `vite-bundled-i18n/server`
 - `vite-bundled-i18n/plugin`
+- `vite-bundled-i18n/generated` — plugin-emitted `PAGE_SCOPE_MAP` and `I18nPageIdentifier`, plus key-level typing
+- `vite-bundled-i18n/testing` — synchronous test helpers (`createTestI18n`, `I18nTestProvider`, `createI18nTestPlugin`)
 
 ## Core
 
@@ -207,6 +209,107 @@ const products = translations.namespace('products', 'show');
 products.get('title'); // "products.show.title"
 ```
 
+### `t.dynamic(key)` — loose-typed escape hatch
+
+Every translator (`t` from `useI18n`, `createTranslations`, `scopedT`, the global `t`) exposes a `.dynamic(key, ...)` method with the same overloads as `t()` but accepting any string — bypasses the typed `TranslationKey` union.
+
+```ts
+const { t } = useI18n('status.dashboard')
+const state: string = getState()
+
+// Typed `t()` requires a literal; `.dynamic()` accepts runtime strings.
+t.dynamic(`status.${state}`)
+t.dynamic(`status.${state}`, 'Unknown')          // with fallback
+t.dynamic('status.notice', { count: 3 })         // with params
+```
+
+Same runtime as `t()` — the only difference is the type contract. Pair with `bundling.dynamicKeys` (below) so the referenced keys are actually shipped; otherwise they'll resolve to the key itself at runtime.
+
+### `createReadinessGate()` / `instance.gate`
+
+Framework-agnostic readiness primitive. Every `I18nInstance` carries one as `instance.gate`. `loadScope()` auto-registers with it and releases on settle — consumers read the gate for a unified "i18n is loading" signal without maintaining their own counters.
+
+```ts
+import { createReadinessGate } from 'vite-bundled-i18n'
+const gate = createReadinessGate()
+gate.ready          // boolean
+gate.pendingCount   // number
+
+const release = gate.register()
+// ... do async work ...
+release()           // idempotent; safe to call multiple times
+
+await gate.whenReady()      // resolves immediately if ready, else on next transition
+gate.subscribe((ready) => { /* fires on every pending-count change */ })
+gate.reset()        // clear pending + notify; stale release tokens become no-ops
+```
+
+**React:**
+
+```tsx
+import { GateBoundary, useGate } from 'vite-bundled-i18n/react'
+
+// Default mode: children always mounted, fallback overlays while loading.
+<GateBoundary fallback={<LoadingBar />}>
+  <App />
+</GateBoundary>
+
+// Suspense mode: throws gate.whenReady() — wrap in <Suspense>.
+<Suspense fallback={<LoadingBar />}>
+  <GateBoundary suspense>
+    <App />
+  </GateBoundary>
+</Suspense>
+
+// Manual read:
+function Indicator() {
+  const { ready, pendingCount } = useGate()
+  return ready ? null : <span>Loading {pendingCount}…</span>
+}
+```
+
+**Vue:**
+
+```ts
+import { useGate } from 'vite-bundled-i18n/vue'
+const { ready, pendingCount } = useGate()  // reactive refs
+```
+
+**Opting out per call:** `loadScope(locale, scope, { trackReadiness: false })` skips gate registration for that call. Use when you have an explicit orchestration layer that already gates rendering.
+
+**Breaking change (v0.6.0):** `loadScope` auto-tracks by default. Apps that kept their own scope counters should remove them.
+
+### `createScopeMapClient(options?)`
+
+Framework-agnostic runtime client for the emitted `scope-map.json`.
+
+```ts
+import { createScopeMapClient } from 'vite-bundled-i18n'
+
+const scopeMap = createScopeMapClient()
+
+await scopeMap.load()
+scopeMap.getSync('products/show')       // readonly string[] | null
+scopeMap.isLoaded()                     // boolean
+await scopeMap.get('cart/index')        // triggers load if not cached
+scopeMap.invalidate()                   // clears cache; next access re-fetches
+```
+
+- Concurrent `load()` calls share a single in-flight promise.
+- `invalidate()` during a pending fetch uses a generation counter so the stale response can't populate the cache.
+- On fetch failure the in-flight entry clears, so retries start fresh.
+- Default URL honors the plugin-injected `__VITE_I18N_BASE__` define so subdirectory deploys (Laravel sidecar, `base: '/admin/'`) resolve without wiring.
+
+Options:
+
+```ts
+createScopeMapClient({
+  url: '/custom/scope-map.json',              // static override
+  resolveUrl: () => `/api/i18n/${tenantId}`,  // dynamic; wins over `url`
+  fetchImpl: customFetch,                      // for SSR / Node < 18
+})
+```
+
 ### `t()`, `hasKey()`, `getGlobalTranslations()`
 
 Global convenience access once an instance is registered.
@@ -307,7 +410,79 @@ Emitted shape (production):
 
 Keys whose namespace is already owned by a dictionary are **not** inlined — dictionaries are the always-available layer by design, and duplicating them into every scope bundle reverses the efficiency win.
 
-**Dev mode:** the dev middleware walks your page entry points (via `options.pages`) to discover cross-namespace references and includes the affected namespaces in every scope bundle response. Dev behaves the same as production for key resolution — no "missing key" flicker for cross-namespace references. The walk is cached and invalidated on locale file changes. If you add a new cross-namespace `t()` call in a component, restart the dev server to pick it up (page files are not watched for diagnostics). If you use the dev plugin without `options.pages` (rare — the main `i18nPlugin` always provides them), the flag has no effect in dev.
+**Dev mode:** the dev middleware walks your page entry points (via `options.pages`) to discover cross-namespace references and includes the affected namespaces in every scope bundle response. Dev behaves the same as production for key resolution — no "missing key" flicker for cross-namespace references. The walk is cached and invalidated on locale file changes and by the Vite transform hook on source edits. If you use the dev plugin without `options.pages` (rare — the main `i18nPlugin` always provides them), the flag has no effect in dev.
+
+### `bundling.dynamicKeys`
+
+Declared runtime-computed keys the extractor can't see from static `t()` calls. Each listed key is injected into every route whose scope's primary namespace matches (or, with `crossNamespacePacking: true`, every route that references the same namespace through another key).
+
+```ts
+defineI18nConfig({
+  localesDir: 'locales',
+  bundling: {
+    dynamicKeys: ['status.active', 'status.pending', 'status.failed'],
+  },
+})
+```
+
+Semantics:
+
+- Keys already owned by a dictionary are **skipped** — dictionaries already guarantee global availability; inlining would duplicate them.
+- Keys whose namespace doesn't match any route and isn't dictionary-owned are **orphans** — the plugin emits a build warning per orphan so silent bloat doesn't creep in.
+- Injected keys flow through the same filter + shake logic as statically extracted keys; no special case in the compiler.
+
+Pair with `t.dynamic(key)` in source code:
+
+```tsx
+const state: 'active' | 'pending' | 'failed' = getState()
+t.dynamic(`status.${state}`)  // resolves correctly at runtime
+```
+
+### `bundling.strictScopeRegistration`
+
+Audit that flags routes whose entire import graph registers no scope. The emitted `PAGE_SCOPE_MAP[pageId]` would be `[]` and consumers using the [router integration](#page-scope-map) pattern couldn't preload anything — almost always a misconfiguration.
+
+```ts
+defineI18nConfig({
+  localesDir: 'locales',
+  bundling: {
+    strictScopeRegistration: 'warn',   // default — logs via Vite's logger
+    // 'error' — fails the build
+    // 'off'   — silent
+  },
+})
+```
+
+Both scope-registration patterns pass the audit:
+
+- **Pattern A:** the page itself calls `useI18n('<literal>')`.
+- **Pattern B:** the page composes child components that register scopes. Children reading the already-loaded cache via `useI18n()` without args stay valid.
+
+The audit only fires when the aggregated scopes across a route's full import graph are empty.
+
+### `bundling.dev.leanBundles`
+
+Tree-shake dev scope-bundle responses to the keys the route's AST extraction found — same shape as the production build.
+
+```ts
+defineI18nConfig({
+  bundling: {
+    dev: {
+      leanBundles: true,   // default
+    },
+  },
+})
+```
+
+Impact on a 50-page admin with 3,000 keys: each dev scope response drops from ~140 kB to ~8 kB. Match prod semantics in dev, keep the dev server snappy on large apps.
+
+Behavior:
+
+- **Lean (default):** the dev middleware consults scope plans built from the same analysis the production build uses. Each response contains only the extracted keys per namespace, plus tree-shaken cross-ns extras when `crossNamespacePacking: true`.
+- **Unknown scope / `options.pages` not configured / explicit opt-out:** the middleware falls back to full namespaces. Preserves the v0.6.0 behavior as a safety net so debugging unregistered scopes still works.
+- **Opt out permanently:** `bundling.dev.leanBundles: false` — restores v0.6.0 dev behavior (ships full namespaces).
+
+The cache is kept warm by the Vite `transform` hook — source edits refresh the underlying extraction cache, which invalidates the scope-plan cache on the next request.
 
 **Devtools:** key-usage entries are tagged with the active scope (set automatically by `useI18n(scope)` on every render). The devtools "Missing Translations" panel filters entries to the current scope so navigating between pages doesn't leave stale misses behind. Entries are also tagged with an epoch that bumps on locale change, so switching locales clears the slate. Call `instance.resetKeyUsage()` from host-app navigation hooks for an explicit reset.
 
@@ -794,3 +969,54 @@ Utility type exported from the package. Converts a nested tree type to a union o
 ### `ValidScope`
 
 Union of valid scope identifiers when `I18nScopeMap` is populated, or `string` when no types are generated.
+
+## Testing
+
+Import from `vite-bundled-i18n/testing`. Synchronous, network-free, gate starts ready — designed for unit tests.
+
+### `createTestI18n(options)`
+
+```ts
+import { createTestI18n } from 'vite-bundled-i18n/testing'
+
+const i18n = createTestI18n({
+  translations: {
+    shared: { ok: 'OK' },
+    products: { show: { title: 'Details' } },
+  },
+  locale: 'en',                // default 'en'
+  defaultLocale: 'en',         // default: same as locale
+  supportedLocales: ['en'],    // default: [locale]
+  passthroughMissing: true,    // default true; false → throws on miss
+})
+```
+
+Returns an `I18nInstance` with the seeded translations already installed via `addResources`. No `loadScope` / `loadAllDictionaries` calls are made, and `instance.gate.ready` starts `true`. Consumers of `<GateBoundary>` / `useGate()` render immediately.
+
+`passthroughMissing: false` is the test-strict mode: any `t()` on a key not seeded (and without an explicit fallback) throws instead of degrading to the key string. Useful for "I forgot to seed X" showing up as a hard failure rather than a silent miss.
+
+### `I18nTestProvider({ instance, children })`
+
+React provider that mounts the `I18nContext` directly with `dictsReady: true`. Skips the async hydration cycle of the production `I18nProvider`.
+
+```tsx
+import { render } from '@testing-library/react'
+import { createTestI18n, I18nTestProvider } from 'vite-bundled-i18n/testing'
+
+const i18n = createTestI18n({ translations: { shared: { ok: 'OK' } } })
+
+render(
+  <I18nTestProvider instance={i18n}>
+    <MyComponent />
+  </I18nTestProvider>,
+)
+```
+
+### `createI18nTestPlugin(instance)`
+
+Vue test plugin — alias of the production `createI18nPlugin` under a name that signals test intent in imports.
+
+```ts
+import { createI18nTestPlugin } from 'vite-bundled-i18n/testing'
+app.use(createI18nTestPlugin(i18n))
+```

@@ -182,6 +182,12 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
   // transform hook's "keys changed" signal naturally refreshes it.
   let cachedScopeMap: ReturnType<typeof buildScopeMap> | undefined;
 
+  // Cached scope plans derived from the same analysis as the scope-map
+  // payload. Used by `buildScopeBundle` to tree-shake dev responses —
+  // same plans the production build uses. Empty list when `options.pages`
+  // isn't configured (dev plugin standalone, no analysis available).
+  let cachedScopePlans: import('../extractor/scope-bundles').ScopeBundlePlan[] | undefined;
+
   function getRequestPath(url: string): string {
     const queryIndex = url.indexOf('?');
     const hashIndex = url.indexOf('#');
@@ -282,6 +288,55 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
     cachedExtrasByScope = undefined;
     cachedExtrasByNamespace = undefined;
     cachedScopeMap = undefined;
+    cachedScopePlans = undefined;
+  }
+
+  /**
+   * Compute (and cache) the scope plans for the project — same shape the
+   * production build uses. Each plan carries a scope's primary keys + any
+   * cross-ns extras. Empty array when `options.pages` isn't configured,
+   * so `buildScopeBundle` can detect the "no analysis" case and fall back
+   * to full namespaces for safety.
+   *
+   * The cache invalidates with the rest of the diagnostics cache (via
+   * locale-file changes and the Vite transform hook on source edits), so
+   * plans stay in sync with the extraction state.
+   */
+  function getScopePlansCached(): import('../extractor/scope-bundles').ScopeBundlePlan[] {
+    if (cachedScopePlans) return cachedScopePlans;
+    cachedScopePlans = [];
+    if (!options?.pages || options.pages.length === 0) return cachedScopePlans;
+
+    try {
+      const analysis = walkAll({
+        pages: options.pages,
+        rootDir: projectRoot,
+        localesDir: resolveLocalesPath(),
+        defaultLocale,
+        extractionScope: options?.extractionScope ?? 'global',
+        hookSources: config.extraction?.hookSources,
+        cache: extractionCache,
+      });
+      if (config.bundling?.dynamicKeys && config.bundling.dynamicKeys.length > 0) {
+        applyDynamicKeys(analysis, {
+          dynamicKeys: config.bundling.dynamicKeys,
+          dictionaries: config.dictionaries,
+          crossNamespacePacking: config.bundling.crossNamespacePacking,
+        });
+      }
+      const availableKeys = new Set<string>();
+      for (const route of analysis.routes) {
+        for (const key of route.keys) {
+          if (!key.dynamic) availableKeys.add(key.key);
+        }
+      }
+      cachedScopePlans = buildScopePlans(analysis, availableKeys, {
+        crossNamespacePacking: config.bundling?.crossNamespacePacking,
+      });
+    } catch {
+      cachedScopePlans = [];
+    }
+    return cachedScopePlans;
   }
 
   function getScopeMapPayload(): ReturnType<typeof buildScopeMap> {
@@ -636,6 +691,15 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
    * tree-shake). For the `_scope/{namespace}` endpoint used in devNamespaceMode,
    * we union extras across every scope that shares this primary namespace.
    */
+  /**
+   * Build the payload for a dev scope-bundle request.
+   *
+   * By default (`bundling.dev.leanBundles: true`) the response is
+   * tree-shaken per route using the walker's extraction data — matches
+   * the production build's shape and keeps large-app dev payloads small.
+   * When lean mode is disabled or no plans are available (e.g. pages
+   * aren't configured), falls back to full namespaces for safety.
+   */
   function buildScopeBundle(
     locale: string,
     scopeOrNamespace: string,
@@ -645,10 +709,71 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
       ? scopeOrNamespace
       : inferScopeNamespace(scopeOrNamespace);
 
+    const leanMode = config.bundling?.dev?.leanBundles !== false;
     const bundle: Record<string, unknown> = {};
-    const data = readNamespaceFile(locale, namespace);
-    if (data) {
-      bundle[namespace] = data;
+
+    // Find the plans that apply to this request. Namespace-mode endpoints
+    // (`/_scope/{namespace}`) cover every scope sharing that primary
+    // namespace — union their keys and extras. Scope-mode endpoints cover
+    // a single scope.
+    const plans = leanMode ? getScopePlansCached() : [];
+    const relevantPlans = leanMode
+      ? plans.filter((p) =>
+          mode === 'namespace'
+            ? p.namespace === namespace
+            : p.scope === scopeOrNamespace,
+        )
+      : [];
+
+    const primaryData = readNamespaceFile(locale, namespace);
+
+    if (leanMode && relevantPlans.length > 0) {
+      // Tree-shake primary namespace to the route's extracted keys.
+      const primaryKeys = new Set<string>();
+      for (const plan of relevantPlans) {
+        for (const k of plan.keys) primaryKeys.add(k);
+      }
+      if (primaryData && primaryKeys.size > 0) {
+        const subkeys = [...primaryKeys]
+          .filter((k) => k.startsWith(`${namespace}.`))
+          .map((k) => k.slice(namespace.length + 1));
+        if (subkeys.length > 0) {
+          bundle[namespace] = pruneNamespace(primaryData, [...new Set(subkeys)]);
+        }
+      }
+
+      // Cross-namespace extras — tree-shake each foreign namespace to the
+      // route's cross-ns keys. Only populated when crossNamespacePacking
+      // is enabled (plans.extras is empty otherwise).
+      const extrasByNs = new Map<string, Set<string>>();
+      for (const plan of relevantPlans) {
+        for (const [extraNs, keys] of plan.extras) {
+          let set = extrasByNs.get(extraNs);
+          if (!set) { set = new Set(); extrasByNs.set(extraNs, set); }
+          for (const k of keys) set.add(k);
+        }
+      }
+      for (const [extraNs, keys] of extrasByNs) {
+        if (extraNs === namespace) continue;
+        if (bundle[extraNs]) continue;
+        const extraData = readNamespaceFile(locale, extraNs);
+        if (!extraData) continue;
+        const subkeys = [...keys]
+          .filter((k) => k.startsWith(`${extraNs}.`))
+          .map((k) => k.slice(extraNs.length + 1));
+        if (subkeys.length > 0) {
+          bundle[extraNs] = pruneNamespace(extraData, [...new Set(subkeys)]);
+        }
+      }
+
+      return bundle;
+    }
+
+    // Full-namespace fallback: used when lean mode is disabled OR when no
+    // plans are available for this scope/namespace (unknown scope, pages
+    // glob not configured, etc.). Preserves the pre-v0.6.1 behavior.
+    if (primaryData) {
+      bundle[namespace] = primaryData;
     }
 
     if (config.bundling?.crossNamespacePacking) {

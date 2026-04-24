@@ -30,8 +30,13 @@ The Vite plugin parses your import graph, maps every `t()` / `useI18n()` / `i18n
 
 - **Scope bundles** — each route loads only its own translations in one HTTP request
 - **Page scope map** — framework-neutral `scope-map.json` + typed `PAGE_SCOPE_MAP` const, so any router can parallelize scope loads with component resolution ([router integration](#router-integration))
+- **Readiness gate** — framework-agnostic `i18n.gate` tracks outstanding `loadScope()` calls; React `<GateBoundary>` / `useGate()` and Vue `useGate()` consume it directly. One primitive, zero consumer counters
+- **`createScopeMapClient()`** — typed runtime client for the emitted scope-map, with in-flight dedup and generation-safe invalidation. Works in any router context
 - **Cross-namespace packing** (opt-in) — inline a route's cross-namespace keys, tree-shaken, into its scope bundle. 1–3 foreign keys don't force a whole dictionary to load globally
 - **Persistent extraction cache** — per-file AST results survive between runs. Warm dev starts in ~250 ms instead of 3–10 s; repeat builds skip the walk when nothing changed
+- **Lean dev bundles** — dev responses are tree-shaken by default (matches prod shape). ~10–20× smaller on large apps; opt-out via `bundling.dev.leanBundles: false`
+- **`t.dynamic()` + `bundling.dynamicKeys`** — loose-typed escape hatch for runtime-computed keys, paired with a config list so declared dynamic keys actually ship
+- **`vite-bundled-i18n/testing`** — `createTestI18n`, `I18nTestProvider`, `createI18nTestPlugin` — synchronous, network-free, ready-by-default for unit tests
 - **Progressive autocomplete** — generated types let the IDE suggest one key segment at a time
 
 ### Also included
@@ -42,6 +47,7 @@ The Vite plugin parses your import graph, maps every `t()` / `useI18n()` / `i18n
 - **Multi-framework** — React, Vue, vanilla JS share a single core
 - **SSR** — server rendering with automatic client hydration via `window.__I18N_RESOURCES__`
 - **AST extraction** — `t()`, `useI18n()`, `i18nKey()`, `defineI18nData()`, configurable `keyFields`, `as const` objects, string enums, helper functions that receive `t` as a parameter
+- **Scope registration audit** — `bundling.strictScopeRegistration: 'off' | 'warn' | 'error'` catches routes that extract zero keys at build time
 - **Dev toolbar** — scope-aware missing-key panel (filters by current route, resets on locale change and HMR), per-namespace bundle efficiency, live updates on navigation
 
 ## Performance
@@ -51,7 +57,8 @@ The library is a performance play end-to-end. Representative numbers for a 50-pa
 | | Traditional i18n | vite-bundled-i18n |
 |---|---|---|
 | Keys per page load | 3,000 (all) | 25–40 (route-extracted) |
-| Bundle size per scope | N/A (monolithic) | ~97% smaller than the source namespace |
+| Scope bundle size (prod) | N/A (monolithic) | ~97% smaller than the source namespace |
+| Scope bundle size (dev) | — | same as prod by default (lean bundles) |
 | HTTP requests per route | many (or one huge) | 1 scope bundle + cached dictionaries |
 | Cold dev start | — | ~200 ms |
 | Warm dev start | — | ~250 ms (extraction cache keeps prior AST parses) |
@@ -62,6 +69,8 @@ The library is a performance play end-to-end. Representative numbers for a 50-pa
 The extraction cache persists to `.i18n/cache/` and auto-invalidates on plugin upgrade, config change, or Node major version change. Disable with `cache: false` or `VITE_I18N_NO_CACHE=1`. See [API docs — Extraction cache](./docs/api.md#extraction-cache-cache).
 
 Compiled mode replaces JSON parsing with pre-resolved flat `Map` modules. Faster than JSON at the browser level (no parse on first lookup), smaller gzipped (shared string pool), cacheable by the browser's module loader. Falls back to JSON automatically when compiled modules aren't available.
+
+Lean dev bundles tree-shake each scope response to the keys the route actually extracted — same shape as the production build. On a 50-page admin, dev scope responses drop from ~140 kB to ~8 kB. Opt out via `bundling.dev.leanBundles: false` if you want the v0.6.0 full-namespace behavior.
 
 ## Setup
 
@@ -250,6 +259,53 @@ i18nPlugin(config, {
 
 Whatever your function returns becomes the key in `scope-map.json` (served at `/__i18n/scope-map.json` in dev, emitted at build under `assetsDir`) and the `I18nPageIdentifier` union in generated types. Routers that want the data without types can fetch the JSON directly.
 
+For pure runtime access without tying into the plugin's type generation, `createScopeMapClient()` is the framework-agnostic fetcher:
+
+```ts
+import { createScopeMapClient } from 'vite-bundled-i18n'
+
+const scopeMap = createScopeMapClient()
+await scopeMap.load()
+scopeMap.getSync('products/show') // ['products.show']
+```
+
+Dedupes concurrent `load()` calls, invalidation during an in-flight fetch is generation-safe, and the default URL honors the plugin-injected base path so Laravel / subdirectory deploys work without wiring.
+
+## Readiness gate
+
+`i18n.gate` is a framework-agnostic primitive that tracks outstanding `loadScope()` calls. Every scope load auto-registers; when all settle, the gate flips back to ready. React and Vue adapters read it directly — no consumer counter needed.
+
+```tsx
+import { GateBoundary, useGate } from 'vite-bundled-i18n/react'
+
+// Children always mounted; fallback overlays while loading.
+<GateBoundary fallback={<LoadingBar />}>
+  <App />
+</GateBoundary>
+
+// Or read the state manually.
+function Indicator() {
+  const { ready, pendingCount } = useGate()
+  if (ready) return null
+  return <Spinner label={`Loading ${pendingCount} scope(s)…`} />
+}
+```
+
+Vue exposes the same shape:
+
+```ts
+import { useGate } from 'vite-bundled-i18n/vue'
+const { ready, pendingCount } = useGate()
+```
+
+**Breaking in v0.6.0:** `loadScope()` now auto-tracks the gate by default. Apps that kept their own readiness counters should remove them. Per-call opt-out:
+
+```ts
+await i18n.loadScope(locale, scope, { trackReadiness: false })
+```
+
+The primitive is designed to be authoritative — no feature-flag softening. See [API docs — Readiness gate](./docs/api.md#readiness-gate).
+
 ## Vue
 
 ```ts
@@ -292,6 +348,23 @@ translations.tryGet('shared.ok')                    // undefined on miss (no fal
 translations.require('shared.ok')                   // throws on miss
 translations.namespace('global').get('nav.home')    // namespace-scoped access
 translations.forLocale('bg').get('shared.ok')       // cross-locale lookup
+
+t.dynamic(`status.${state}`)                        // escape hatch — loose-typed
+t.dynamic(`status.${state}`, 'Unknown')             // same overloads as t()
+```
+
+`t.dynamic(key)` accepts any string, bypassing the typed `TranslationKey` union. Identical runtime to `t()` — only the type contract differs. Use for keys assembled from variables. Pair with `bundling.dynamicKeys` so declared runtime keys actually ship:
+
+```ts
+defineI18nConfig({
+  localesDir: 'locales',
+  bundling: {
+    // Each key is injected into every route whose scope primary namespace
+    // matches. Dictionary-owned keys are skipped; orphans (no matching
+    // route, no dictionary) emit a build warning.
+    dynamicKeys: ['status.active', 'status.pending', 'status.failed'],
+  },
+})
 ```
 
 ## Dictionaries
@@ -442,13 +515,49 @@ cache: {
 }
 ```
 
+## Testing
+
+Unit tests and integration tests import from `vite-bundled-i18n/testing`. `createTestI18n` returns a synchronous instance seeded with translations you supply — no network, no pending promises, gate starts ready:
+
+```ts
+import { createTestI18n, I18nTestProvider } from 'vite-bundled-i18n/testing'
+import { render, screen } from '@testing-library/react'
+
+const i18n = createTestI18n({
+  translations: {
+    shared: { ok: 'OK' },
+    products: { show: { title: 'Details' } },
+  },
+})
+
+render(
+  <I18nTestProvider instance={i18n}>
+    <MyComponent />
+  </I18nTestProvider>,
+)
+```
+
+Options:
+
+- `locale` — default `'en'`
+- `defaultLocale` — default: same as `locale`
+- `supportedLocales` — default: `[locale]`
+- `passthroughMissing` — default `true`. Set `false` to have missing keys throw, turning "I forgot to seed" into a hard test failure instead of a silent key-as-value.
+
+Vue equivalent:
+
+```ts
+import { createI18nTestPlugin } from 'vite-bundled-i18n/testing'
+app.use(createI18nTestPlugin(i18n))
+```
+
 ## Package Entries
 
 | Entry | Purpose |
 |-------|---------|
-| `vite-bundled-i18n` | Core runtime, config helpers, type utilities |
-| `vite-bundled-i18n/react` | `I18nProvider`, `useI18n`, `I18nBoundary`, `DevToolbar` |
-| `vite-bundled-i18n/vue` | `createI18nPlugin`, `useI18n` |
+| `vite-bundled-i18n` | Core runtime, config helpers, `createReadinessGate`, `createScopeMapClient` |
+| `vite-bundled-i18n/react` | `I18nProvider`, `useI18n`, `I18nBoundary`, `GateBoundary`, `useGate`, `DevToolbar` |
+| `vite-bundled-i18n/vue` | `createI18nPlugin`, `useI18n`, `useGate` |
 | `vite-bundled-i18n/vanilla` | `getTranslations`, `initI18n` |
 | `vite-bundled-i18n/server` | `initServerI18n` (SSR) |
 | `vite-bundled-i18n/plugin` | Vite plugin (`i18nPlugin`) |
@@ -463,7 +572,7 @@ cache: {
 
 ## Releases
 
-Current release: **v0.6.0** — framework-agnostic readiness gate (`i18n.gate`, `<GateBoundary>`, `useGate()`), runtime `createScopeMapClient()`, `t.dynamic()` escape hatch, `bundling.dynamicKeys` + `strictScopeRegistration`, `vite-bundled-i18n/testing` subpackage. Breaking: `loadScope` now auto-registers with the gate by default — opt out via `{ trackReadiness: false }`.
+Current release: **v0.6.1** — lean dev bundles (dev responses tree-shaken by default, ~95% smaller on large apps). Built on v0.6.0's framework-agnostic readiness gate (`i18n.gate`, `<GateBoundary>`, `useGate()`), runtime `createScopeMapClient()`, `t.dynamic()` escape hatch, `bundling.dynamicKeys` + `strictScopeRegistration`, `vite-bundled-i18n/testing` subpackage. Breaking in v0.6.0: `loadScope` auto-registers with the gate by default — opt out via `{ trackReadiness: false }`.
 
 Version history lives in the [git log](https://github.com/nicolasvlachos/vite-bundled-i18n/commits/main) — each release is a `feat: v{version}` commit with a summary of the changes.
 
