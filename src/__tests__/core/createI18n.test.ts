@@ -317,6 +317,64 @@ describe('createI18n', () => {
     expect(instance.translate('en', 'products.show.title')).toBe('Details');
   });
 
+  it('loads a cross-namespace packed scope bundle and resolves both primary and extras keys', async () => {
+    // Cross-namespace packing emits extras as additional top-level namespaces.
+    // The store's deep-merge makes this transparent: partial extras merge with
+    // any later full-namespace load for the same namespace.
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        giftcards: { show: { title: 'Gift card' } },
+        vendors:   { compact: { name: 'Vendor' } },
+        activity:  { types: { redeem: 'Redeemed' } },
+      }),
+    } as Response);
+
+    const instance = createI18n(baseConfig);
+    await instance.loadScope('en', 'giftcards.show');
+
+    expect(instance.translate('en', 'giftcards.show.title')).toBe('Gift card');
+    expect(instance.translate('en', 'vendors.compact.name')).toBe('Vendor');
+    expect(instance.translate('en', 'activity.types.redeem')).toBe('Redeemed');
+
+    // Unused keys from the extras namespaces are absent (tree-shaken).
+    expect(instance.tryTranslate('en', 'vendors.compact.logo')).toBeUndefined();
+    expect(instance.tryTranslate('en', 'activity.types.issue')).toBeUndefined();
+  });
+
+  it('merges partial extras with a later full-namespace load', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          giftcards: { show: { title: 'Gift card' } },
+          vendors:   { compact: { name: 'Vendor' } },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          vendors: { compact: { name: 'Vendor', logo: 'Logo' }, full: { bio: 'Bio' } },
+        }),
+      } as Response);
+    globalThis.fetch = fetchMock;
+
+    const instance = createI18n(baseConfig);
+    await instance.loadScope('en', 'giftcards.show');
+
+    // Partial extras present.
+    expect(instance.translate('en', 'vendors.compact.name')).toBe('Vendor');
+    expect(instance.tryTranslate('en', 'vendors.compact.logo')).toBeUndefined();
+
+    // Load the full vendors scope on a different page.
+    await instance.loadScope('en', 'vendors.index');
+
+    // The partial extras data merged with the full namespace — both keys resolve.
+    expect(instance.translate('en', 'vendors.compact.name')).toBe('Vendor');
+    expect(instance.translate('en', 'vendors.compact.logo')).toBe('Logo');
+    expect(instance.translate('en', 'vendors.full.bio')).toBe('Bio');
+  });
+
   it('uses namespace-backed scope bundles in dev mode and reuses loaded namespaces across scopes', async () => {
     (globalThis as typeof globalThis & { __VITE_I18N_DEV__?: boolean }).__VITE_I18N_DEV__ = true;
 
@@ -641,6 +699,94 @@ describe('createI18n', () => {
     expect(missingKeyWarns).toHaveLength(2);
     expect(missingKeyWarns[0][0]).toContain('missing.key');
     expect(missingKeyWarns[1][0]).toContain('another.missing');
+
+    warnSpy.mockRestore();
+  });
+
+  it('annotates recorded entries with the active scope set via setActiveScope', () => {
+    const instance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+    });
+
+    instance.setActiveScope('products.index');
+    instance.translate('en', 'products.index.heading');
+
+    instance.setActiveScope('cart.summary');
+    instance.translate('en', 'cart.summary.total');
+
+    const entries = instance.getKeyUsage();
+    const byScope = new Map(entries.map((e) => [e.key, e.scope]));
+    expect(byScope.get('products.index.heading')).toBe('products.index');
+    expect(byScope.get('cart.summary.total')).toBe('cart.summary');
+  });
+
+  it('devtools-style filter hides misses from other scopes under the same epoch', () => {
+    const instance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+    });
+
+    // Simulate visiting route A.
+    instance.setActiveScope('products.index');
+    instance.translate('en', 'products.index.bogus'); // miss
+
+    // Simulate navigating to route B — no locale change, so same epoch.
+    instance.setActiveScope('cart.summary');
+    instance.translate('en', 'cart.summary.total'); // miss
+
+    const currentEpoch = instance.getKeyUsageEpoch();
+    const missesOnCart = instance
+      .getKeyUsage()
+      .filter((e) =>
+        e.resolvedFrom === 'key-as-value' &&
+        e.epoch === currentEpoch &&
+        (!e.scope || e.scope === 'cart.summary'),
+      )
+      .map((e) => e.key);
+
+    expect(missesOnCart).toEqual(['cart.summary.total']);
+  });
+
+  it('does not record key-as-value usage while a covering scope is loading', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const instance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+    });
+
+    instance.addLoadingScope('products.index');
+
+    // Mid-render t() call before the bundle resolves.
+    instance.translate('en', 'products.index.heading');
+
+    // Neither a warning nor a missing-key usage entry should be recorded.
+    const missingWarns = warnSpy.mock.calls.filter(
+      call => typeof call[0] === 'string' && call[0].includes('Missing translation')
+    );
+    expect(missingWarns).toHaveLength(0);
+
+    const misses = instance
+      .getKeyUsage()
+      .filter((entry) => entry.resolvedFrom === 'key-as-value');
+    expect(misses).toHaveLength(0);
+
+    // After the scope finishes loading, a still-missing key is recorded.
+    instance.removeLoadingScope('products.index');
+    instance.translate('en', 'products.index.still-missing');
+
+    const missesAfter = instance
+      .getKeyUsage()
+      .filter((entry) => entry.resolvedFrom === 'key-as-value');
+    expect(missesAfter).toHaveLength(1);
+    expect(missesAfter[0].key).toBe('products.index.still-missing');
 
     warnSpy.mockRestore();
   });

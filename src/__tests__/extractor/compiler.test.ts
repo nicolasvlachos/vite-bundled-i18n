@@ -193,4 +193,123 @@ describe('compileAll', () => {
     const dictModule = fs.readFileSync(path.join(outDir, 'en', '_dict', 'global.js'), 'utf-8');
     expect(dictModule).toContain('shared.ok');
   });
+
+  it('includes cross-namespace extras in compiled scope modules when flag is on', () => {
+    writeFile('locales/en/giftcards.json', JSON.stringify({
+      show: { title: 'Gift card', subtitle: 'Redeem now' },
+    }));
+    writeFile('locales/en/vendors.json', JSON.stringify({
+      compact: { name: 'Vendor', logo: 'Logo' },
+      full: { bio: 'Long bio' },
+    }));
+
+    const analysis: ProjectAnalysis = {
+      routes: [{
+        entryPoint: '/src/pages/giftcards/show.tsx',
+        routeId: 'giftcards-show',
+        scopes: ['giftcards.show'],
+        keys: [
+          makeKey('giftcards.show.title'),
+          makeKey('vendors.compact.name'),
+        ],
+        files: [],
+      }],
+      availableNamespaces: ['giftcards', 'vendors'],
+      allKeys: [],
+      sharedNamespaces: [],
+    };
+
+    const outDir = path.join(tmpDir, 'compiled');
+    compileAll(analysis, {
+      localesDir: path.join(tmpDir, 'locales'),
+      locales: ['en'],
+      defaultLocale: 'en',
+      outDir,
+      crossNamespacePacking: true,
+    });
+
+    const mod = fs.readFileSync(path.join(outDir, 'en', 'giftcards.show.js'), 'utf-8');
+    expect(mod).toContain("'giftcards.show.title'");
+    expect(mod).toContain("'vendors.compact.name'");
+    // Tree-shaken: other keys in the extras namespace are not shipped.
+    expect(mod).not.toContain("'vendors.compact.logo'");
+    expect(mod).not.toContain("'vendors.full.bio'");
+    // Own-namespace tree-shaking still applies.
+    expect(mod).not.toContain("'giftcards.show.subtitle'");
+  });
+
+  it('omits cross-namespace extras from compiled scope modules when flag is off', () => {
+    writeFile('locales/en/giftcards.json', JSON.stringify({
+      show: { title: 'Gift card' },
+    }));
+    writeFile('locales/en/vendors.json', JSON.stringify({
+      compact: { name: 'Vendor' },
+    }));
+
+    const analysis: ProjectAnalysis = {
+      routes: [{
+        entryPoint: '/src/pages/giftcards/show.tsx',
+        routeId: 'giftcards-show',
+        scopes: ['giftcards.show'],
+        keys: [
+          makeKey('giftcards.show.title'),
+          makeKey('vendors.compact.name'),
+        ],
+        files: [],
+      }],
+      availableNamespaces: ['giftcards', 'vendors'],
+      allKeys: [],
+      sharedNamespaces: [],
+    };
+
+    const outDir = path.join(tmpDir, 'compiled');
+    compileAll(analysis, {
+      localesDir: path.join(tmpDir, 'locales'),
+      locales: ['en'],
+      defaultLocale: 'en',
+      outDir,
+    });
+
+    const mod = fs.readFileSync(path.join(outDir, 'en', 'giftcards.show.js'), 'utf-8');
+    expect(mod).toContain("'giftcards.show.title'");
+    expect(mod).not.toContain("'vendors.compact.name'");
+  });
+
+  it('skips extras whose namespace is owned by a dictionary', () => {
+    writeFile('locales/en/giftcards.json', JSON.stringify({
+      show: { title: 'Gift card' },
+    }));
+    writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK' }));
+
+    const analysis: ProjectAnalysis = {
+      routes: [{
+        entryPoint: '/src/pages/giftcards/show.tsx',
+        routeId: 'giftcards-show',
+        scopes: ['giftcards.show'],
+        keys: [
+          makeKey('giftcards.show.title'),
+          makeKey('shared.ok'),
+        ],
+        files: [],
+      }],
+      availableNamespaces: ['giftcards', 'shared'],
+      allKeys: [],
+      sharedNamespaces: [],
+    };
+
+    const outDir = path.join(tmpDir, 'compiled');
+    compileAll(analysis, {
+      localesDir: path.join(tmpDir, 'locales'),
+      locales: ['en'],
+      defaultLocale: 'en',
+      outDir,
+      crossNamespacePacking: true,
+      dictionaries: { global: { include: ['shared.*'] } },
+    });
+
+    const mod = fs.readFileSync(path.join(outDir, 'en', 'giftcards.show.js'), 'utf-8');
+    expect(mod).toContain("'giftcards.show.title'");
+    // Already in the dictionary — don't duplicate into the scope module.
+    expect(mod).not.toContain("'shared.ok'");
+  });
 });

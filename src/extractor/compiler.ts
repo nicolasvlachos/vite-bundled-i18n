@@ -19,6 +19,13 @@ export interface CompilerOptions {
   outDir: string;
   /** Optional dictionary configurations. */
   dictionaries?: Record<string, DictionaryConfig>;
+  /**
+   * Inline cross-namespace keys (tree-shaken) into each scope module.
+   * See `I18nSharedConfig.bundling.crossNamespacePacking`.
+   *
+   * @default false
+   */
+  crossNamespacePacking?: boolean;
 }
 
 /**
@@ -225,7 +232,7 @@ export function compileAll(
   analysis: ProjectAnalysis,
   options: CompilerOptions,
 ): void {
-  const { localesDir, locales, defaultLocale, outDir, dictionaries } = options;
+  const { localesDir, locales, defaultLocale, outDir, dictionaries, crossNamespacePacking } = options;
 
   fs.mkdirSync(outDir, { recursive: true });
 
@@ -236,11 +243,19 @@ export function compileAll(
   const ownership = resolveDictionaryOwnership(defaultFullMap.keys(), dictionaries);
 
   // For each scope + locale: collect used keys, filter, resolve fallbacks, write
-  const scopePlans = buildScopePlans(analysis, defaultFullMap.keys());
+  const scopePlans = buildScopePlans(analysis, defaultFullMap.keys(), { crossNamespacePacking });
   for (const plan of scopePlans) {
     const usedKeys = new Set(
       [...plan.keys].filter((key) => !ownership.keyOwner.has(key)),
     );
+    if (crossNamespacePacking) {
+      for (const extraKeys of plan.extras.values()) {
+        for (const key of extraKeys) {
+          if (ownership.keyOwner.has(key)) continue;
+          usedKeys.add(key);
+        }
+      }
+    }
     for (const locale of locales) {
       const localeDir = path.join(outDir, locale);
       fs.mkdirSync(localeDir, { recursive: true });

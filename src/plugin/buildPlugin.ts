@@ -103,6 +103,7 @@ export function emitI18nBuildArtifacts(
     locales: buildConfig.locales,
     outDir: assetsOutDir,
     dictionaries: sharedConfig.dictionaries,
+    crossNamespacePacking: sharedConfig.bundling?.crossNamespacePacking,
   });
 
   if (buildConfig.emitTypes !== false) {
@@ -119,6 +120,7 @@ export function emitI18nBuildArtifacts(
       defaultLocale: buildConfig.defaultLocale,
       outDir: compiledOutDir,
       dictionaries: sharedConfig.dictionaries,
+      crossNamespacePacking: sharedConfig.bundling?.crossNamespacePacking,
     });
   }
 

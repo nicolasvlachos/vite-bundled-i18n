@@ -7,6 +7,9 @@ import { generateTypes } from '../extractor/type-generator';
 import type { I18nSharedConfig } from '../core/config';
 import { I18N_DEV_UPDATE_EVENT } from '../core/runtime-env';
 import { buildDevDiagnostics } from './devDiagnostics';
+import { walkAll } from '../extractor/walker';
+import { buildScopePlans, inferScopeNamespace } from '../extractor/scope-bundles';
+import type { ProjectAnalysis } from '../extractor/walker-types';
 
 /**
  * Configuration for the i18n dev plugin.
@@ -109,6 +112,12 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
   // Cache diagnostics payload — invalidated on locale file changes.
   let cachedDiagnostics: ReturnType<typeof buildDevDiagnostics> | undefined;
 
+  // Cache of (scope → set of cross-ns extras namespaces) for this project,
+  // used only when crossNamespacePacking is enabled. Invalidated whenever
+  // locale or page source files change. Keyed by scope string.
+  let cachedExtrasByScope: Map<string, Set<string>> | undefined;
+  let cachedExtrasByNamespace: Map<string, Set<string>> | undefined;
+
   function getRequestPath(url: string): string {
     const queryIndex = url.indexOf('?');
     const hashIndex = url.indexOf('#');
@@ -205,6 +214,76 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
 
   function invalidateDiagnosticsCache(): void {
     cachedDiagnostics = undefined;
+    cachedExtrasByScope = undefined;
+    cachedExtrasByNamespace = undefined;
+  }
+
+  /**
+   * Compute (and cache) which foreign namespaces each scope references —
+   * only when `bundling.crossNamespacePacking` is enabled. The dev scope-
+   * bundle responder unions these in so cross-namespace keys resolve in
+   * dev with the same semantics as the built assets.
+   *
+   * Returns two indexes:
+   * - `byScope`: used when the runtime fetches `/__i18n/{locale}/{scope}.json`.
+   * - `byNamespace`: used when the runtime is in devNamespaceMode and fetches
+   *   `/__i18n/{locale}/_scope/{namespace}.json` — we union extras across all
+   *   scopes that share that primary namespace, since one namespace file backs
+   *   many scopes in dev.
+   *
+   * Walking requires `options.pages` globs. If not provided (dev plugin used
+   * without the main i18nPlugin), returns empty indexes and the flag has no
+   * dev-mode effect.
+   */
+  function getExtrasIndex(): {
+    byScope: Map<string, Set<string>>;
+    byNamespace: Map<string, Set<string>>;
+  } {
+    if (!cachedExtrasByScope || !cachedExtrasByNamespace) {
+      cachedExtrasByScope = new Map();
+      cachedExtrasByNamespace = new Map();
+
+      if (config.bundling?.crossNamespacePacking && options?.pages && options.pages.length > 0) {
+        let analysis: ProjectAnalysis | undefined;
+        try {
+          analysis = walkAll({
+            pages: options.pages,
+            rootDir: projectRoot,
+            localesDir: resolveLocalesPath(),
+            defaultLocale,
+            extractionScope: options?.extractionScope ?? 'global',
+            hookSources: config.extraction?.hookSources,
+          });
+        } catch {
+          return { byScope: cachedExtrasByScope, byNamespace: cachedExtrasByNamespace };
+        }
+
+        const availableKeys = new Set<string>();
+        for (const route of analysis.routes) {
+          for (const key of route.keys) {
+            if (!key.dynamic) availableKeys.add(key.key);
+          }
+        }
+
+        const plans = buildScopePlans(analysis, availableKeys, {
+          crossNamespacePacking: true,
+        });
+
+        for (const plan of plans) {
+          const scopeExtras = new Set<string>();
+          for (const ns of plan.extras.keys()) scopeExtras.add(ns);
+          cachedExtrasByScope.set(plan.scope, scopeExtras);
+
+          let nsBucket = cachedExtrasByNamespace.get(plan.namespace);
+          if (!nsBucket) {
+            nsBucket = new Set<string>();
+            cachedExtrasByNamespace.set(plan.namespace, nsBucket);
+          }
+          for (const ns of plan.extras.keys()) nsBucket.add(ns);
+        }
+      }
+    }
+    return { byScope: cachedExtrasByScope, byNamespace: cachedExtrasByNamespace };
   }
 
   function writeTextFileIfChanged(outputPath: string, content: string): void {
@@ -343,7 +422,7 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
         const namespace = file.slice(0, -'.json'.length);
         writeDevAsset(
           path.join(locale, '_scope', `${namespace}.json`),
-          buildScopeBundle(locale, namespace),
+          buildScopeBundle(locale, namespace, 'namespace'),
           writtenFiles,
         );
       }
@@ -401,20 +480,44 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
    *
    * The first segment of the scope is the namespace:
    *   'products.show' → reads products.json → { products: { ... } }
+   *
+   * When `bundling.crossNamespacePacking` is enabled and a scope references
+   * foreign namespaces, those are included too (full data — dev doesn't
+   * tree-shake). For the `_scope/{namespace}` endpoint used in devNamespaceMode,
+   * we union extras across every scope that shares this primary namespace.
    */
   function buildScopeBundle(
     locale: string,
-    scope: string,
+    scopeOrNamespace: string,
+    mode: 'scope' | 'namespace' = 'scope',
   ): Record<string, unknown> {
-    const namespace = scope.indexOf('.') === -1
-      ? scope
-      : scope.slice(0, scope.indexOf('.'));
+    const namespace = mode === 'namespace'
+      ? scopeOrNamespace
+      : inferScopeNamespace(scopeOrNamespace);
 
     const bundle: Record<string, unknown> = {};
     const data = readNamespaceFile(locale, namespace);
     if (data) {
       bundle[namespace] = data;
     }
+
+    if (config.bundling?.crossNamespacePacking) {
+      const { byScope, byNamespace } = getExtrasIndex();
+      const extrasNs = mode === 'namespace'
+        ? byNamespace.get(namespace)
+        : byScope.get(scopeOrNamespace);
+      if (extrasNs) {
+        for (const extraNs of extrasNs) {
+          if (extraNs === namespace) continue;
+          if (bundle[extraNs]) continue;
+          const extraData = readNamespaceFile(locale, extraNs);
+          if (extraData) {
+            bundle[extraNs] = extraData;
+          }
+        }
+      }
+    }
+
     return bundle;
   }
 
@@ -570,7 +673,7 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
         );
         if (devNamespaceMatch) {
           const [, locale, namespace] = devNamespaceMatch;
-          const bundle = buildScopeBundle(locale, namespace);
+          const bundle = buildScopeBundle(locale, namespace, 'namespace');
           const json = JSON.stringify(bundle);
           res.setHeader('Content-Type', 'application/json');
           res.setHeader('Cache-Control', 'no-cache');
@@ -584,7 +687,7 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
         );
         if (scopeMatch) {
           const [, locale, scope] = scopeMatch;
-          const bundle = buildScopeBundle(locale, scope);
+          const bundle = buildScopeBundle(locale, scope, 'scope');
           const json = JSON.stringify(bundle);
           res.setHeader('Content-Type', 'application/json');
           res.setHeader('Cache-Control', 'no-cache');

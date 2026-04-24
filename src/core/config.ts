@@ -35,6 +35,29 @@ export interface I18nSharedConfig {
      */
     hookSources?: string[];
   };
+  /** Bundling behavior for scope/dictionary emission. */
+  bundling?: {
+    /**
+     * Inline cross-namespace keys into each scope bundle.
+     *
+     * By default, a scope bundle contains only the keys that belong to the
+     * scope's own namespace (e.g. `products.show` → `products.*` only). Keys
+     * referenced on the route from other namespaces are expected to be
+     * covered by a dictionary.
+     *
+     * When enabled, the extractor collects cross-namespace keys referenced
+     * on each route, tree-shakes them down to just the used subset, and
+     * inlines them into the same scope bundle. Keys that are already owned
+     * by a dictionary are skipped (no point duplicating the always-available
+     * layer into per-page bundles).
+     *
+     * This trades a slightly larger per-scope payload for zero extra HTTP
+     * requests and zero ceremony around shared cross-module components.
+     *
+     * @default false
+     */
+    crossNamespacePacking?: boolean;
+  };
 }
 
 /**

@@ -67,6 +67,7 @@ interface RuntimeSnapshot {
   cacheStats: CacheStats;
   store: Record<string, NestedTranslations>;
   keyUsage: KeyUsageEntry[];
+  keyUsageEpoch: number;
   uniqueKeyCount: number;
   residentKeyCount: number;
   namespaceDetails: NamespaceDetail[];
@@ -184,7 +185,9 @@ function buildRuntimeSnapshot(
   );
 
   const keyUsage = instance.getKeyUsage();
-  const uniqueKeyCount = new Set(keyUsage.map((entry) => entry.key)).size;
+  const keyUsageEpoch = instance.getKeyUsageEpoch?.() ?? 0;
+  const currentEpochEntries = keyUsage.filter((entry) => entry.epoch === keyUsageEpoch);
+  const uniqueKeyCount = new Set(currentEpochEntries.map((entry) => entry.key)).size;
   const residentKeyCount = instance.getResidentKeyCount(locale);
 
   return {
@@ -197,6 +200,7 @@ function buildRuntimeSnapshot(
     cacheStats: instance.getCacheStats(),
     store,
     keyUsage,
+    keyUsageEpoch,
     uniqueKeyCount,
     residentKeyCount,
     namespaceDetails: buildNamespaceDetails(instance, locale, loadedNamespaces, loadedDictionaries),
@@ -227,7 +231,7 @@ function buildPanelMarkup(runtime: RuntimeSnapshot): string {
       </div>
 
       <div class="vbi18n-body">
-        ${renderFootprintPanel(runtime.locale, runtime.currentScope, runtime.keyUsage, runtime.store)}
+        ${renderFootprintPanel(runtime.locale, runtime.currentScope, runtime.keyUsage, runtime.store, runtime.keyUsageEpoch)}
         ${renderBundlesPanel({
           loadedDictionaries: runtime.loadedDictionaries,
           loadedScopes: runtime.loadedScopes,
@@ -412,6 +416,26 @@ export function mountI18nDevtools(
     }
   });
 
+  // HMR: after Vite swaps modules the runtime still has stale key-usage
+  // entries from before the update. Clear them so the panel reflects the
+  // new module graph. Not all environments expose import.meta.hot.
+  let unsubHmr: (() => void) | undefined;
+  const hot = typeof import.meta !== 'undefined'
+    ? (import.meta as { hot?: { on?: (event: string, cb: () => void) => void; off?: (event: string, cb: () => void) => void } }).hot
+    : undefined;
+  if (hot?.on) {
+    const handler = () => {
+      instance.resetKeyUsage?.();
+      if (dialog.open) {
+        refresh();
+      } else {
+        updateButton(buildRuntimeSnapshot(instance, options));
+      }
+    };
+    hot.on('vite:beforeUpdate', handler);
+    unsubHmr = () => hot.off?.('vite:beforeUpdate', handler);
+  }
+
   // --- Initial render ---
   updateButton(buildRuntimeSnapshot(instance, options));
   mountTarget.append(button, dialog);
@@ -422,6 +446,7 @@ export function mountI18nDevtools(
     destroy() {
       unsubLocale();
       unsubResources();
+      unsubHmr?.();
       closeDialog();
       button.remove();
       dialog.remove();

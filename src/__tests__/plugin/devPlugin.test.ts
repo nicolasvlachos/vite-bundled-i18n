@@ -66,12 +66,14 @@ function createPluginHarness(
   resolvedConfigOverrides?: {
     publicDir?: string | false;
   },
+  configOverrides?: Partial<Parameters<typeof i18nDevPlugin>[0]>,
 ) {
   const plugin = i18nDevPlugin({
     localesDir: 'locales',
     dictionaries: {
       global: { include: ['shared.*', 'global.*', 'actions.*'], exclude: ['shared.secret'] },
     },
+    ...configOverrides,
   }, options);
 
   const watcherHandlers: Record<WatchEvent, Array<(filePath: string) => void>> = {
@@ -215,6 +217,74 @@ describe('i18nDevPlugin', () => {
         show: { title: 'Product Details' },
       },
     });
+  });
+
+  it('includes cross-namespace extras in the scope bundle response when crossNamespacePacking is on', () => {
+    // Add a vendors namespace + a giftcards.show page that references it.
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/vendors.json'),
+      JSON.stringify({ compact: { name: 'Vendor' }, full: { bio: 'Bio' } }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/giftcards.json'),
+      JSON.stringify({ show: { title: 'Gift card' } }),
+    );
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/giftcards'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/giftcards/show.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function GiftcardShow() {',
+        "  const { t } = useI18n('giftcards.show');",
+        "  return <div>{t('giftcards.show.title')}{t('vendors.compact.name')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+
+    const { middleware } = createPluginHarness(
+      { pages: ['src/pages/**/*.tsx'], defaultLocale: 'en' },
+      undefined,
+      { bundling: { crossNamespacePacking: true } },
+    );
+    const { response, next } = runMiddleware(middleware, '/__i18n/en/giftcards.show.json');
+
+    expect(next).not.toHaveBeenCalled();
+    const body = JSON.parse(response.body);
+    expect(body.giftcards).toEqual({ show: { title: 'Gift card' } });
+    // Extras namespace is included (full data — dev doesn't tree-shake).
+    expect(body.vendors).toEqual({ compact: { name: 'Vendor' }, full: { bio: 'Bio' } });
+  });
+
+  it('does not inline extras into scope bundle responses when crossNamespacePacking is off', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/vendors.json'),
+      JSON.stringify({ compact: { name: 'Vendor' } }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/giftcards.json'),
+      JSON.stringify({ show: { title: 'Gift card' } }),
+    );
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/giftcards'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/giftcards/show.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function GiftcardShow() {',
+        "  const { t } = useI18n('giftcards.show');",
+        "  return <div>{t('vendors.compact.name')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+
+    const { middleware } = createPluginHarness({
+      pages: ['src/pages/**/*.tsx'],
+      defaultLocale: 'en',
+    });
+    const { response } = runMiddleware(middleware, '/__i18n/en/giftcards.show.json');
+
+    const body = JSON.parse(response.body);
+    expect(body.giftcards).toBeDefined();
+    expect(body.vendors).toBeUndefined();
   });
 
   it('handles query strings on i18n asset requests', () => {

@@ -485,4 +485,126 @@ describe('generateBundles', () => {
       },
     });
   });
+
+  // ─── crossNamespacePacking ────────────────────────────────────────
+
+  it('inlines cross-namespace keys into scope bundles when crossNamespacePacking is on', () => {
+    writeLocale('en', 'giftcards', {
+      show: { title: 'Gift card', subtitle: 'Redeem now' },
+      index: { heading: 'All cards' },
+    });
+    writeLocale('en', 'vendors', {
+      compact: { name: 'Vendor', logo: 'Logo' },
+      full: { bio: 'Long bio' },
+    });
+    writeLocale('en', 'activity', {
+      types: { redeem: 'Redeemed', issue: 'Issued', expire: 'Expired' },
+    });
+
+    const analysis = makeAnalysis({
+      routes: [
+        {
+          entryPoint: '/app/pages/giftcards/show.tsx',
+          routeId: 'giftcards-show',
+          scopes: ['giftcards.show'],
+          keys: [
+            makeKey('giftcards.show.title'),
+            makeKey('vendors.compact.name'),
+            makeKey('activity.types.redeem'),
+          ],
+          files: ['/app/pages/giftcards/show.tsx'],
+        },
+      ],
+      availableNamespaces: ['giftcards', 'vendors', 'activity'],
+    });
+
+    const bundles = generateBundles(analysis, {
+      localesDir: path.join(tmpDir, 'locales'),
+      locales: ['en'],
+      outDir: outDir(),
+      crossNamespacePacking: true,
+    });
+
+    const scopeBundle = bundles.find((b) => b.name === 'giftcards.show')!;
+    const written = JSON.parse(fs.readFileSync(scopeBundle.filePath, 'utf-8'));
+
+    expect(written).toEqual({
+      giftcards: { show: { title: 'Gift card' } },
+      vendors: { compact: { name: 'Vendor' } },
+      activity: { types: { redeem: 'Redeemed' } },
+    });
+    // Tree-shaking still holds per-namespace: unused keys dropped.
+    expect(written.giftcards.show.subtitle).toBeUndefined();
+    expect(written.vendors.compact.logo).toBeUndefined();
+    expect(written.activity.types.issue).toBeUndefined();
+  });
+
+  it('skips extras for namespaces already owned by a dictionary', () => {
+    writeLocale('en', 'giftcards', { show: { title: 'Gift card' } });
+    writeLocale('en', 'shared', { ok: 'OK', cancel: 'Cancel' });
+
+    const analysis = makeAnalysis({
+      routes: [
+        {
+          entryPoint: '/app/pages/giftcards/show.tsx',
+          routeId: 'giftcards-show',
+          scopes: ['giftcards.show'],
+          keys: [
+            makeKey('giftcards.show.title'),
+            makeKey('shared.ok'),
+          ],
+          files: ['/app/pages/giftcards/show.tsx'],
+        },
+      ],
+      availableNamespaces: ['giftcards', 'shared'],
+    });
+
+    const bundles = generateBundles(analysis, {
+      localesDir: path.join(tmpDir, 'locales'),
+      locales: ['en'],
+      outDir: outDir(),
+      crossNamespacePacking: true,
+      dictionaries: {
+        global: { include: ['shared.*'] },
+      },
+    });
+
+    const scopeBundle = bundles.find((b) => b.name === 'giftcards.show')!;
+    const written = JSON.parse(fs.readFileSync(scopeBundle.filePath, 'utf-8'));
+
+    expect(written.giftcards).toEqual({ show: { title: 'Gift card' } });
+    // The dictionary already ships shared.* — don't duplicate it into every scope.
+    expect(written.shared).toBeUndefined();
+  });
+
+  it('does not populate extras when crossNamespacePacking is off', () => {
+    writeLocale('en', 'giftcards', { show: { title: 'Gift card' } });
+    writeLocale('en', 'vendors', { compact: { name: 'Vendor' } });
+
+    const analysis = makeAnalysis({
+      routes: [
+        {
+          entryPoint: '/app/pages/giftcards/show.tsx',
+          routeId: 'giftcards-show',
+          scopes: ['giftcards.show'],
+          keys: [
+            makeKey('giftcards.show.title'),
+            makeKey('vendors.compact.name'),
+          ],
+          files: ['/app/pages/giftcards/show.tsx'],
+        },
+      ],
+      availableNamespaces: ['giftcards', 'vendors'],
+    });
+
+    const bundles = generateBundles(analysis, {
+      localesDir: path.join(tmpDir, 'locales'),
+      locales: ['en'],
+      outDir: outDir(),
+    });
+
+    const scopeBundle = bundles.find((b) => b.name === 'giftcards.show')!;
+    const written = JSON.parse(fs.readFileSync(scopeBundle.filePath, 'utf-8'));
+    expect(written.vendors).toBeUndefined();
+  });
 });

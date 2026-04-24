@@ -86,6 +86,10 @@ export function useI18n(scope?: string): UseI18nReturn {
 
   const instance: I18nInstance = injected;
 
+  // Tag translate() calls from this component with the scope so the devtools
+  // panel can filter misses from previous routes.
+  instance.setActiveScope(scope);
+
   const locale = ref(instance.getLocale());
   const hasDicts = instance.getDictionaryNames().length > 0;
   const ready = ref(computeReady());

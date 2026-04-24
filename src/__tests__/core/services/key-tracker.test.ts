@@ -16,6 +16,7 @@ describe('createKeyTracker', () => {
       locale: 'en',
       resolvedFrom: 'primary',
       scope: 'products',
+      epoch: 0,
     });
     expect(entries[1]).toEqual({
       key: 'shared.ok',
@@ -23,7 +24,46 @@ describe('createKeyTracker', () => {
       locale: 'en',
       resolvedFrom: 'fallback-locale',
       scope: undefined,
+      epoch: 0,
     });
+  });
+
+  it('tags recorded entries with the current epoch', () => {
+    const tracker = createKeyTracker(true);
+
+    tracker.recordUsage('a.x', 'a', 'en', 'primary');
+    tracker.bumpEpoch();
+    tracker.recordUsage('a.y', 'a', 'en', 'primary');
+
+    const entries = tracker.getKeyUsage();
+    expect(entries.map((e) => e.epoch)).toEqual([0, 1]);
+    expect(tracker.getEpoch()).toBe(1);
+  });
+
+  it('reset() clears entries and bumps epoch', () => {
+    const tracker = createKeyTracker(true);
+
+    tracker.recordUsage('a.x', 'a', 'en', 'primary');
+    tracker.recordUsage('a.y', 'a', 'en', 'key-as-value');
+    expect(tracker.getKeyUsage()).toHaveLength(2);
+
+    tracker.reset();
+    expect(tracker.getKeyUsage()).toEqual([]);
+    expect(tracker.getEpoch()).toBe(1);
+
+    // warnedKeys dedup set is cleared — previously-warned keys fire again.
+    const warn = vi.fn();
+    tracker.warnMissing('a.y', 'en', warn);
+    tracker.warnMissing('a.y', 'en', warn);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('disabled tracker reports epoch 0 and reset is a no-op', () => {
+    const tracker = createKeyTracker(false);
+    expect(tracker.getEpoch()).toBe(0);
+    tracker.bumpEpoch();
+    tracker.reset();
+    expect(tracker.getEpoch()).toBe(0);
   });
 
   it('is a complete no-op when disabled', () => {

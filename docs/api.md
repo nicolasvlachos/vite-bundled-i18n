@@ -274,6 +274,43 @@ defineI18nConfig({
 })
 ```
 
+### `bundling.crossNamespacePacking`
+
+Inline cross-namespace keys into each scope bundle, tree-shaken to the exact subset the route extracts.
+
+By default, a scope bundle only includes keys from the scope's own namespace. A route that calls `t('vendors.compact.name')` from a `giftcards.show` page relies on `vendors.*` being loaded via a dictionary or another `useI18n('vendors.*')` hook somewhere in the tree. When the reference is a handful of keys used on a cold-path page (e.g. a show view you may never visit), promoting the whole namespace to a dictionary is wasteful — it ships on every page load.
+
+With `crossNamespacePacking: true`, the extractor collects cross-namespace keys referenced on each route, tree-shakes them down to just the used subset, and inlines them into the same scope bundle. One HTTP request, zero dictionary bloat, exactly the keys the route needs.
+
+```ts
+defineI18nConfig({
+  localesDir: 'locales',
+  dictionaries: {
+    global: { include: ['shared.*'] },
+  },
+  bundling: {
+    crossNamespacePacking: true,
+  },
+})
+```
+
+Emitted shape (production):
+
+```jsonc
+// __i18n/en/giftcards.show.json
+{
+  "giftcards": { "show": { "title": "Gift card", "..." : "..." } },
+  "vendors":   { "compact": { "name": "Vendor" } },        // 1 key — tree-shaken from vendors.json
+  "activity":  { "types":   { "redeem": "Redeemed" } }      // 1 key — tree-shaken from activity.json
+}
+```
+
+Keys whose namespace is already owned by a dictionary are **not** inlined — dictionaries are the always-available layer by design, and duplicating them into every scope bundle reverses the efficiency win.
+
+**Dev mode:** the dev middleware walks your page entry points (via `options.pages`) to discover cross-namespace references and includes the affected namespaces in every scope bundle response. Dev behaves the same as production for key resolution — no "missing key" flicker for cross-namespace references. The walk is cached and invalidated on locale file changes. If you add a new cross-namespace `t()` call in a component, restart the dev server to pick it up (page files are not watched for diagnostics). If you use the dev plugin without `options.pages` (rare — the main `i18nPlugin` always provides them), the flag has no effect in dev.
+
+**Devtools:** key-usage entries are tagged with the active scope (set automatically by `useI18n(scope)` on every render). The devtools "Missing Translations" panel filters entries to the current scope so navigating between pages doesn't leave stale misses behind. Entries are also tagged with an epoch that bumps on locale change, so switching locales clears the slate. Call `instance.resetKeyUsage()` from host-app navigation hooks for an explicit reset.
+
 ### `defineI18nData(data)` and `i18nKey(key)`
 
 Helpers for serializable data/config modules:

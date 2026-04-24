@@ -73,6 +73,11 @@ export function useI18n(scope?: ValidScope): UseI18nResult {
     instance.addLoadingScope(scope);
   }
 
+  // Tag every recordUsage call from this render with the page's scope so
+  // the devtools panel can filter misses from previous routes. Runs on
+  // every render — covers both the cold-load and the already-cached paths.
+  instance.setActiveScope(scope);
+
   useEffect(() => {
     if (!scope || scopeReady) {
       // Scope loaded or no scope — remove from loading set

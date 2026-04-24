@@ -17,6 +17,13 @@ export interface BundleGeneratorOptions {
   outDir: string;
   /** Optional named dictionary configurations. */
   dictionaries?: Record<string, DictionaryConfig>;
+  /**
+   * Inline cross-namespace keys (tree-shaken) into each scope bundle.
+   * See `I18nSharedConfig.bundling.crossNamespacePacking`.
+   *
+   * @default false
+   */
+  crossNamespacePacking?: boolean;
 }
 
 /**
@@ -124,7 +131,7 @@ export function generateBundles(
   analysis: ProjectAnalysis,
   options: BundleGeneratorOptions,
 ): GeneratedBundle[] {
-  const { localesDir, locales, outDir, dictionaries } = options;
+  const { localesDir, locales, outDir, dictionaries, crossNamespacePacking } = options;
   const bundles: GeneratedBundle[] = [];
 
   const availableKeys = new Set<string>();
@@ -140,7 +147,7 @@ export function generateBundles(
   const sharedNsSet = hasNamedDictionaries ? new Set<string>() : new Set(analysis.sharedNamespaces);
 
   // Generate per-scope bundles keyed by scope string, matching runtime URLs.
-  for (const plan of buildScopePlans(analysis, availableKeys)) {
+  for (const plan of buildScopePlans(analysis, availableKeys, { crossNamespacePacking })) {
     for (const locale of locales) {
       const bundleData: Record<string, unknown> = {};
       let totalKeyCount = 0;
@@ -161,6 +168,29 @@ export function generateBundles(
         const keptCount = flattenKeys(pruned).length;
         totalKeyCount += keptCount;
         totalPrunedCount += availableCount - keptCount;
+      }
+
+      // Cross-namespace extras: tree-shake per foreign namespace and inline.
+      if (crossNamespacePacking) {
+        for (const [extraNs, extraKeys] of plan.extras) {
+          // Skip namespaces fully covered by a dictionary — don't duplicate
+          // the always-available layer into every scope bundle.
+          const retained = [...extraKeys].filter((k) => !ownership.keyOwner.has(k));
+          if (retained.length === 0) continue;
+          if (!hasNamedDictionaries && sharedNsSet.has(extraNs)) continue;
+
+          const extraSubKeys = retained
+            .filter((key) => key.startsWith(`${extraNs}.`))
+            .map((key) => key.slice(extraNs.length + 1));
+          if (extraSubKeys.length === 0) continue;
+
+          const extraFullData = readNamespaceFile(localesDir, locale, extraNs);
+          if (!extraFullData) continue;
+
+          const pruned = pruneNamespace(extraFullData, [...new Set(extraSubKeys)]);
+          bundleData[extraNs] = pruned;
+          totalKeyCount += flattenKeys(pruned).length;
+        }
       }
 
       const filePath = path.join(outDir, locale, `${plan.scope}.json`);

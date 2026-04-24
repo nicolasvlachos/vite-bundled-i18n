@@ -29,6 +29,11 @@ export interface CliConfig {
   dictionaries?: Record<string, DictionaryConfig>;
   /** Additional module specifiers that export `useI18n`. */
   hookSources?: string[];
+  /**
+   * Inline cross-namespace keys (tree-shaken) into each scope bundle.
+   * See `I18nSharedConfig.bundling.crossNamespacePacking`.
+   */
+  crossNamespacePacking?: boolean;
 }
 
 function resolveConfig(config: CliConfig) {
@@ -151,6 +156,7 @@ export function generate(config: CliConfig): void {
     localesDir,
     locales: config.locales,
     outDir,
+    crossNamespacePacking: config.crossNamespacePacking,
   });
 
   writeTypes(localesDir, config.defaultLocale, typesOutPath, collectScopeNames(analysis));
@@ -194,6 +200,7 @@ export function compile(config: CliConfig): void {
     defaultLocale: config.defaultLocale,
     outDir: compiledOutDir,
     dictionaries: config.dictionaries,
+    crossNamespacePacking: config.crossNamespacePacking,
   });
 
   // Count generated modules: one per route per locale, plus dictionary modules
@@ -238,6 +245,7 @@ export function build(config: CliConfig): void {
     localesDir,
     locales: config.locales,
     outDir,
+    crossNamespacePacking: config.crossNamespacePacking,
   });
 
   writeTypes(localesDir, config.defaultLocale, typesOutPath, collectScopeNames(analysis));
@@ -253,6 +261,7 @@ export function build(config: CliConfig): void {
     defaultLocale: config.defaultLocale,
     outDir: compiledOutDir,
     dictionaries: config.dictionaries,
+    crossNamespacePacking: config.crossNamespacePacking,
   });
   console.log(`Compiled modules written to ${compiledOutDir}`);
 

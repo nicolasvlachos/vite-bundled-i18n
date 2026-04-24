@@ -261,6 +261,15 @@ export function createI18n(config: I18nConfig): I18nInstance {
   const loadingScopes = new Set<string>();
 
   /**
+   * The scope the host adapter is currently rendering under, if any. Set by
+   * {@link I18nInstance.setActiveScope} (called by `useI18n(scope)` on every
+   * render and by `getTranslations(instance, scope)`). Annotated onto every
+   * {@link KeyUsageEntry.scope} so the devtools panel can filter stale
+   * entries from other routes without waiting for a locale change.
+   */
+  let activeScope: string | undefined;
+
+  /**
    * Check if a key belongs to a scope that's currently loading.
    * If so, the missing-key warning should be suppressed.
    */
@@ -292,24 +301,24 @@ export function createI18n(config: I18nConfig): I18nInstance {
       // Try requested locale
       const primaryValue = compiledTryTranslateFromMap(getCompiledLocaleMap(locale), key, params);
       if (primaryValue !== undefined) {
-        keyTracker.recordUsage(key, namespace, locale, 'primary');
+        keyTracker.recordUsage(key, namespace, locale, 'primary', activeScope);
         return primaryValue;
       }
       // Fallback to default locale (same chain as JSON mode)
       if (locale !== config.defaultLocale) {
         const fallbackValue = compiledTryTranslateFromMap(getCompiledLocaleMap(config.defaultLocale), key, params);
         if (fallbackValue !== undefined) {
-          keyTracker.recordUsage(key, namespace, locale, 'fallback-locale');
+          keyTracker.recordUsage(key, namespace, locale, 'fallback-locale', activeScope);
           return fallbackValue;
         }
       }
       // Fallback string or key
       if (fallback !== undefined) {
-        keyTracker.recordUsage(key, namespace, locale, 'fallback-string');
+        keyTracker.recordUsage(key, namespace, locale, 'fallback-string', activeScope);
         return interpolate(fallback, params);
       }
-      keyTracker.recordUsage(key, namespace, locale, 'key-as-value');
       if (!isKeyInLoadingScope(key)) {
+        keyTracker.recordUsage(key, namespace, locale, 'key-as-value', activeScope);
         keyTracker.warnMissing(key, locale);
       }
       return key;
@@ -319,7 +328,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
     const subkey = extractSubkey(key);
 
     if (!subkey) {
-      keyTracker.recordUsage(key, namespace, locale, 'fallback-string');
+      keyTracker.recordUsage(key, namespace, locale, 'fallback-string', activeScope);
       if (fallback !== undefined) return interpolate(fallback, params);
       return key;
     }
@@ -329,7 +338,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
     if (data) {
       const value = resolveKey(data, subkey);
       if (value !== undefined) {
-        keyTracker.recordUsage(key, namespace, locale, 'primary');
+        keyTracker.recordUsage(key, namespace, locale, 'primary', activeScope);
         return interpolate(value, params);
       }
     }
@@ -340,7 +349,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
       if (fallbackData) {
         const value = resolveKey(fallbackData, subkey);
         if (value !== undefined) {
-          keyTracker.recordUsage(key, namespace, locale, 'fallback-locale');
+          keyTracker.recordUsage(key, namespace, locale, 'fallback-locale', activeScope);
           return interpolate(value, params);
         }
       }
@@ -348,12 +357,12 @@ export function createI18n(config: I18nConfig): I18nInstance {
 
     // Return fallback string or key
     if (fallback !== undefined) {
-      keyTracker.recordUsage(key, namespace, locale, 'fallback-string');
+      keyTracker.recordUsage(key, namespace, locale, 'fallback-string', activeScope);
       return interpolate(fallback, params);
     }
 
-    keyTracker.recordUsage(key, namespace, locale, 'key-as-value');
     if (!isKeyInLoadingScope(key)) {
+      keyTracker.recordUsage(key, namespace, locale, 'key-as-value', activeScope);
       keyTracker.warnMissing(key, locale);
     }
     return key;
@@ -496,6 +505,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
       compiledLocaleMaps.delete(locale);
     }
     cache.unloadLocale(locale);
+    keyTracker.bumpEpoch();
   }
 
   function unloadNamespace(locale: string, namespace: string): void {
@@ -510,6 +520,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
       }
     }
     cache.unloadNamespace(locale, namespace);
+    keyTracker.bumpEpoch();
   }
 
   // -- changeLocale with compiled-map cleanup --------------------------------
@@ -519,6 +530,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
       // Clear compiled data for the target locale so fresh modules are loaded
       compiledLocaleMaps.delete(locale);
     }
+    keyTracker.bumpEpoch();
     await localeManager.changeLocale(locale);
   }
 
@@ -614,12 +626,18 @@ export function createI18n(config: I18nConfig): I18nInstance {
     onLocaleChange: (callback) => localeManager.onLocaleChange(callback),
     onResourcesChange: (callback) => cache.onResourcesChange(callback),
     getKeyUsage: () => keyTracker.getKeyUsage(),
+    getKeyUsageEpoch: () => keyTracker.getEpoch(),
+    resetKeyUsage: () => keyTracker.reset(),
     getResidentKeyCount: (locale) => cache.getResidentKeyCount(locale),
     addLoadingScope(scope: string) {
       loadingScopes.add(scope);
+      activeScope = scope;
     },
     removeLoadingScope(scope: string) {
       loadingScopes.delete(scope);
+    },
+    setActiveScope(scope: string | undefined) {
+      activeScope = scope;
     },
   };
 

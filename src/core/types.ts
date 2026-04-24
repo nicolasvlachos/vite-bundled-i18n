@@ -501,6 +501,21 @@ export interface I18nInstance {
   getKeyUsage: () => KeyUsageEntry[];
 
   /**
+   * Returns the current key-usage epoch — a monotonic counter bumped on
+   * locale change, namespace unload, and explicit {@link resetKeyUsage}
+   * calls. Devtools compare each entry's `epoch` against this value to
+   * drop stale entries from previous routes or locales.
+   */
+  getKeyUsageEpoch: () => number;
+
+  /**
+   * Clears all recorded key-usage entries and bumps the epoch. Intended
+   * for HMR wiring and host-app route-change hooks so that the devtools
+   * panel reflects the current page only.
+   */
+  resetKeyUsage: () => void;
+
+  /**
    * Returns the count of unique leaf translation keys currently resident
    * in memory for a locale across all loaded namespaces.
    */
@@ -527,6 +542,18 @@ export interface I18nInstance {
    * finishes loading.
    */
   removeLoadingScope: (scope: string) => void;
+
+  /**
+   * Tag subsequent `translate()` calls with a scope annotation on their
+   * recorded {@link KeyUsageEntry}. Host adapters (React's `useI18n(scope)`,
+   * the vanilla `getTranslations(instance, scope)` helper) set this on
+   * every render so the devtools panel can filter stale entries from
+   * other routes without waiting for a locale change.
+   *
+   * Passing `undefined` clears the annotation (e.g. when `useI18n()` is
+   * called without a scope).
+   */
+  setActiveScope: (scope: string | undefined) => void;
 }
 
 /**
@@ -544,6 +571,12 @@ export interface KeyUsageEntry {
   resolvedFrom: 'primary' | 'fallback-locale' | 'fallback-string' | 'key-as-value';
   /** The scope/bundle that triggered this lookup, if any. */
   scope?: string;
+  /**
+   * Monotonic counter bumped on locale change, namespace unload, and explicit
+   * `resetKeyUsage()` calls. Devtools panels compare against the current
+   * epoch to filter stale entries from previous routes/locales.
+   */
+  epoch: number;
 }
 
 /**

@@ -31,6 +31,7 @@ Layout.tsx        ──→  Dictionary rules   ──→   __i18n/en/_dict/glob
 ## Features
 
 - **Scope bundles** — each route loads only its own translations, one HTTP request
+- **Cross-namespace packing** (opt-in) — inline a route's cross-namespace keys (tree-shaken) into its scope bundle, so 1–3 foreign keys don't force a whole dictionary to load globally
 - **Dictionary ownership** — named dictionaries claim keys by pattern (`include`/`exclude`/`priority`)
 - **Progressive autocomplete** — generated types let the IDE suggest one key segment at a time
 - **Placeholder validation** — `t('cart.total', { amount: 9.99 })` is type-checked against `{{amount}}` in the JSON
@@ -230,6 +231,8 @@ Traditional i18n ships every translation key to every page. `vite-bundled-i18n` 
 3. **Scope bundle generation** — for each route, the plugin reads the full namespace JSON file (e.g. `locales/en/products.json` with 882 keys), then **prunes it to only the keys that route's AST extraction found** (e.g. 25 keys). The remaining 857 keys are dropped from that bundle entirely.
 
 4. **Dictionary bundles are not tree-shaken** — they include all keys matching the `include`/`exclude` patterns. Dictionaries are the "always available" layer for shared UI (nav, actions, validation). Tree-shaking only applies to scope bundles.
+
+5. **Cross-namespace packing** (opt-in via `bundling.crossNamespacePacking: true`) — when a route references a handful of keys from a foreign namespace (e.g. `giftcards.show` uses `vendors.compact.name` once), those keys are tree-shaken and inlined into the scope bundle. One HTTP request covers everything the route needs. Keys already owned by a dictionary are skipped so the global layer isn't duplicated. Dev middleware mirrors the behavior by serving cross-namespace extras alongside each scope request, so dev and production resolve keys identically. See [API docs](./docs/api.md#bundlingcrossnamespacepacking) for the emitted shape.
 
 ### What you get
 

@@ -14,7 +14,8 @@ type WarnFn = (message: string) => void;
  */
 export interface KeyTracker {
   /**
-   * Record a single key lookup.
+   * Record a single key lookup. Entries are tagged with the current epoch
+   * so devtools can filter stale entries after a locale change or reset.
    *
    * @param key - Fully qualified translation key.
    * @param namespace - Namespace extracted from the key.
@@ -36,6 +37,25 @@ export interface KeyTracker {
    * @returns A mutable reference to the internal entries array.
    */
   getKeyUsage(): KeyUsageEntry[];
+
+  /**
+   * Return the current epoch. Devtools compare each entry's `epoch` field
+   * against this value to drop stale rows from previous routes/locales.
+   */
+  getEpoch(): number;
+
+  /**
+   * Bump the epoch without clearing entries. Call this on locale change
+   * or namespace unload — old entries stay in memory (for "all keys ever
+   * used" views) but the devtools panel filters them out.
+   */
+  bumpEpoch(): void;
+
+  /**
+   * Clear all entries and bump the epoch. Call from HMR hooks and explicit
+   * host-app reset paths.
+   */
+  reset(): void;
 
   /**
    * Emit a console warning for a missing key, deduplicating by key string.
@@ -66,23 +86,41 @@ export function createKeyTracker(
     return {
       recordUsage() {},
       getKeyUsage() { return []; },
+      getEpoch() { return 0; },
+      bumpEpoch() {},
+      reset() {},
       warnMissing() {},
     };
   }
 
-  const entries: KeyUsageEntry[] = [];
+  let entries: KeyUsageEntry[] = [];
   const warnedKeys = new Set<string>();
+  let epoch = 0;
 
   return {
     recordUsage(key, namespace, locale, resolvedFrom, scope) {
       if (entries.length >= maxEntries) {
         entries.splice(0, Math.floor(maxEntries * DROP_FRACTION));
       }
-      entries.push({ key, namespace, locale, resolvedFrom, scope });
+      entries.push({ key, namespace, locale, resolvedFrom, scope, epoch });
     },
 
     getKeyUsage() {
       return entries;
+    },
+
+    getEpoch() {
+      return epoch;
+    },
+
+    bumpEpoch() {
+      epoch++;
+    },
+
+    reset() {
+      entries = [];
+      warnedKeys.clear();
+      epoch++;
     },
 
     warnMissing(key, locale, warn) {

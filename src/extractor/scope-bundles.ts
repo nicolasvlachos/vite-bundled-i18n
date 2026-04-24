@@ -4,8 +4,26 @@ import type { ExtractedKey } from './types';
 export interface ScopeBundlePlan {
   scope: string;
   namespace: string;
+  /** Keys from the scope's own (primary) namespace. */
   keys: Set<string>;
+  /**
+   * Cross-namespace keys referenced on this route, keyed by namespace.
+   *
+   * Populated only when `buildScopePlans` is called with
+   * `crossNamespacePacking: true`. Empty otherwise.
+   */
+  extras: Map<string, Set<string>>;
   routeIds: Set<string>;
+}
+
+export interface BuildScopePlansOptions {
+  /**
+   * Collect cross-namespace keys into {@link ScopeBundlePlan.extras} so the
+   * emit phase can inline them into each scope bundle.
+   *
+   * @default false
+   */
+  crossNamespacePacking?: boolean;
 }
 
 export function inferScopeNamespace(scope: string): string {
@@ -19,10 +37,21 @@ function keyNamespace(key: ExtractedKey): string | undefined {
   return dotIndex === -1 ? undefined : source.slice(0, dotIndex);
 }
 
+function getOrCreate<K, V>(map: Map<K, Set<V>>, key: K): Set<V> {
+  let set = map.get(key);
+  if (!set) {
+    set = new Set<V>();
+    map.set(key, set);
+  }
+  return set;
+}
+
 export function buildScopePlans(
   analysis: ProjectAnalysis,
   availableKeys: Iterable<string>,
+  options: BuildScopePlansOptions = {},
 ): ScopeBundlePlan[] {
+  const { crossNamespacePacking = false } = options;
   const scopePlans = new Map<string, ScopeBundlePlan>();
   const allAvailableKeys = [...availableKeys];
 
@@ -35,6 +64,7 @@ export function buildScopePlans(
           scope,
           namespace,
           keys: new Set<string>(),
+          extras: new Map<string, Set<string>>(),
           routeIds: new Set<string>(),
         };
         scopePlans.set(scope, plan);
@@ -43,17 +73,23 @@ export function buildScopePlans(
       plan.routeIds.add(route.routeId);
 
       for (const key of route.keys) {
-        if (keyNamespace(key) !== namespace) continue;
+        const ns = keyNamespace(key);
+        if (!ns) continue;
+
+        const isPrimary = ns === namespace;
+        if (!isPrimary && !crossNamespacePacking) continue;
+
+        const bucket = isPrimary ? plan.keys : getOrCreate(plan.extras, ns);
 
         if (!key.dynamic) {
-          plan.keys.add(key.key);
+          bucket.add(key.key);
           continue;
         }
 
         if (!key.staticPrefix) continue;
         for (const availableKey of allAvailableKeys) {
           if (availableKey.startsWith(key.staticPrefix)) {
-            plan.keys.add(availableKey);
+            bucket.add(availableKey);
           }
         }
       }

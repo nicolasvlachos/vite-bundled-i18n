@@ -62,11 +62,14 @@ export function renderFootprintPanel(
   currentScope: string | undefined,
   keyUsage: KeyUsageEntry[],
   store: Record<string, NestedTranslations>,
+  currentEpoch: number,
 ): string {
-  // Deduplicate by key
+  // Drop entries from previous routes/locales (bumped epoch). Deduplicate
+  // the current-epoch view by key so one row per translation is shown.
   const seen = new Set<string>();
   const unique: KeyUsageEntry[] = [];
   for (const entry of keyUsage) {
+    if (entry.epoch !== currentEpoch) continue;
     if (!seen.has(entry.key)) {
       seen.add(entry.key);
       unique.push(entry);
@@ -107,8 +110,14 @@ export function renderFootprintPanel(
   // Render key rows with actual values
   const parts: string[] = [statsBar];
 
-  // Missing keys first (prominent)
-  const missing = unique.filter(e => e.resolvedFrom === 'key-as-value');
+  // Missing keys first (prominent). Further narrow to the current scope
+  // so navigating between pages doesn't leave stale misses from other routes
+  // sitting in the list.
+  const missing = unique.filter((e) => {
+    if (e.resolvedFrom !== 'key-as-value') return false;
+    if (!currentScope) return true;
+    return !e.scope || e.scope === currentScope;
+  });
   if (missing.length > 0) {
     const missingRows = missing.map(e => `
       <div class="vbi18n-filterable" data-key="${escapeHtml(e.key)}" style="display:flex;align-items:baseline;gap:8px;padding:3px 0;font-size:11px">

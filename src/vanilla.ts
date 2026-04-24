@@ -103,6 +103,7 @@ export async function initI18n(
   }
   if (options?.scope) {
     await instance.loadScope(config.locale, options.scope);
+    instance.setActiveScope(options.scope);
   }
   if (options?.devtools) {
     mountI18nDevtools(instance, {
