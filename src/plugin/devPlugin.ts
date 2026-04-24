@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Plugin, ResolvedConfig } from 'vite';
 import { flattenKeys, pruneNamespace } from '../extractor/bundle-generator';
-import { keyMatchesPattern, normalizeDictionaries } from '../extractor/dictionary-ownership';
+import {
+  keyMatchesPattern,
+  normalizeDictionaries,
+  resolveDictionaryOwnership,
+} from '../extractor/dictionary-ownership';
 import {
   generateTypes,
   writeRuntimeConst,
@@ -188,6 +192,18 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
   // isn't configured (dev plugin standalone, no analysis available).
   let cachedScopePlans: import('../extractor/scope-bundles').ScopeBundlePlan[] | undefined;
 
+  // Cached walked analysis. Single source of truth for scope plans,
+  // ownership, and the legacy `sharedNamespaces` heuristic used when the
+  // project doesn't configure named dictionaries.
+  let cachedAnalysis: ProjectAnalysis | undefined;
+
+  // Dictionary ownership cache derived from the same analysis as the scope
+  // plans. Used by `buildScopeBundle` to skip keys that a dictionary already
+  // ships globally — matches production's bundle-generator / compiler
+  // filter. Invalidates alongside scope plans since it's derived from the
+  // same walked keys.
+  let cachedOwnership: ReturnType<typeof resolveDictionaryOwnership> | undefined;
+
   function getRequestPath(url: string): string {
     const queryIndex = url.indexOf('?');
     const hashIndex = url.indexOf('#');
@@ -289,6 +305,42 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
     cachedExtrasByNamespace = undefined;
     cachedScopeMap = undefined;
     cachedScopePlans = undefined;
+    cachedAnalysis = undefined;
+    cachedOwnership = undefined;
+  }
+
+  /**
+   * Compute (and cache) dictionary ownership over every statically extracted
+   * key in the project. Mirrors production's emit pipeline, which filters
+   * scope-bundle and cross-ns-extras keys through `ownership.keyOwner` so
+   * dictionary-claimed keys aren't duplicated into every per-page bundle.
+   *
+   * Shares invalidation with `cachedScopePlans` — they derive from the same
+   * walked extraction data, so any source edit that changes a plan also
+   * changes ownership.
+   *
+   * Returns an empty ownership when no analysis is available (standalone
+   * dev plugin without `options.pages`); the caller's filter then becomes
+   * a no-op and behavior degrades gracefully to "ship everything".
+   */
+  function getOwnershipCached(): ReturnType<typeof resolveDictionaryOwnership> {
+    if (cachedOwnership) return cachedOwnership;
+
+    // Walking unconditionally would duplicate getScopePlansCached's work;
+    // piggyback on its analysis. If plans aren't cached yet we'd still need
+    // to walk ourselves — but getScopePlansCached runs on the first
+    // buildScopeBundle request, so by the time the lean filter needs
+    // ownership the plans (and thus extraction data) are already warm.
+    const plans = getScopePlansCached();
+    const allKeys = new Set<string>();
+    for (const plan of plans) {
+      for (const key of plan.keys) allKeys.add(key);
+      for (const keys of plan.extras.values()) {
+        for (const key of keys) allKeys.add(key);
+      }
+    }
+    cachedOwnership = resolveDictionaryOwnership(allKeys, config.dictionaries);
+    return cachedOwnership;
   }
 
   /**
@@ -333,10 +385,28 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
       cachedScopePlans = buildScopePlans(analysis, availableKeys, {
         crossNamespacePacking: config.bundling?.crossNamespacePacking,
       });
+      cachedAnalysis = analysis;
     } catch {
       cachedScopePlans = [];
+      cachedAnalysis = undefined;
     }
     return cachedScopePlans;
+  }
+
+  /**
+   * Return the legacy "shared namespaces" heuristic (namespaces used by
+   * >50% of routes). Production's `generateBundles` uses this to decide
+   * whether a scope's primary/extra namespace keys should be filtered out
+   * in favor of a shared dictionary bundle — but ONLY when no named
+   * dictionaries are configured. With named dictionaries this is an empty
+   * set and the filter is a no-op.
+   *
+   * Dev must mirror this to keep `dev shape ≡ prod shape` across all
+   * three config topologies (named dicts, inferred-shared, neither).
+   */
+  function getSharedNamespaces(): readonly string[] {
+    getScopePlansCached();
+    return cachedAnalysis?.sharedNamespaces ?? [];
   }
 
   function getScopeMapPayload(): ReturnType<typeof buildScopeMap> {
@@ -728,10 +798,31 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
     const primaryData = readNamespaceFile(locale, namespace);
 
     if (leanMode && relevantPlans.length > 0) {
-      // Tree-shake primary namespace to the route's extracted keys.
+      // Apply the same two-branch filter prod's `bundle-generator.ts` uses:
+      //   1. Dictionary-owned keys (`keyOwner`) — dictionaries ship these
+      //      globally, never duplicate into a scope bundle.
+      //   2. Legacy inferred-shared namespaces (`sharedNsSet`) — only kicks
+      //      in when the project has NO named dictionaries. In that mode
+      //      namespaces used by >50% of routes get their own shared bundle;
+      //      scope bundles must exclude their keys so there's no overlap.
+      //
+      // With named dictionaries configured (the common case), `sharedNsSet`
+      // is empty and the second branch is a no-op — matches prod exactly.
+      const { keyOwner, rules } = getOwnershipCached();
+      const hasNamedDictionaries = rules.length > 0;
+      const sharedNsSet = hasNamedDictionaries
+        ? new Set<string>()
+        : new Set(getSharedNamespaces());
+
+      // Tree-shake primary namespace to the route's extracted keys, minus
+      // anything dict-owned or shared-inferred for the plan's primary ns.
       const primaryKeys = new Set<string>();
       for (const plan of relevantPlans) {
-        for (const k of plan.keys) primaryKeys.add(k);
+        if (!hasNamedDictionaries && sharedNsSet.has(plan.namespace)) continue;
+        for (const k of plan.keys) {
+          if (keyOwner.has(k)) continue;
+          primaryKeys.add(k);
+        }
       }
       if (primaryData && primaryKeys.size > 0) {
         const subkeys = [...primaryKeys]
@@ -742,20 +833,27 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
         }
       }
 
-      // Cross-namespace extras — tree-shake each foreign namespace to the
-      // route's cross-ns keys. Only populated when crossNamespacePacking
-      // is enabled (plans.extras is empty otherwise).
+      // Cross-namespace extras — skip whole namespaces that are inferred-
+      // shared (they go into a legacy shared dictionary bundle instead).
+      // Within the remaining namespaces, drop dict-owned keys. Empty-after-
+      // filter namespaces are dropped entirely so the response doesn't
+      // carry a phantom `{ shared: {} }` entry.
       const extrasByNs = new Map<string, Set<string>>();
       for (const plan of relevantPlans) {
         for (const [extraNs, keys] of plan.extras) {
+          if (!hasNamedDictionaries && sharedNsSet.has(extraNs)) continue;
           let set = extrasByNs.get(extraNs);
           if (!set) { set = new Set(); extrasByNs.set(extraNs, set); }
-          for (const k of keys) set.add(k);
+          for (const k of keys) {
+            if (keyOwner.has(k)) continue;
+            set.add(k);
+          }
         }
       }
       for (const [extraNs, keys] of extrasByNs) {
         if (extraNs === namespace) continue;
         if (bundle[extraNs]) continue;
+        if (keys.size === 0) continue;
         const extraData = readNamespaceFile(locale, extraNs);
         if (!extraData) continue;
         const subkeys = [...keys]
@@ -771,7 +869,9 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
 
     // Full-namespace fallback: used when lean mode is disabled OR when no
     // plans are available for this scope/namespace (unknown scope, pages
-    // glob not configured, etc.). Preserves the pre-v0.6.1 behavior.
+    // glob not configured, etc.). Preserves the pre-v0.6.1 behavior, with
+    // the same dictionary-ownership filter the lean path uses so extras
+    // that are fully owned by a dictionary don't duplicate into the bundle.
     if (primaryData) {
       bundle[namespace] = primaryData;
     }
@@ -782,11 +882,47 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
         ? byNamespace.get(namespace)
         : byScope.get(scopeOrNamespace);
       if (extrasNs) {
+        // Mirror the two-branch filter from the lean path:
+        //   1. Dictionary-owned keys — but check via rules directly (not
+        //      the ownership map) since the full-namespace path includes
+        //      keys the extractor never saw.
+        //   2. Inferred-shared namespaces when no named dicts are set.
+        const rules = getDictionaryRules();
+        const hasNamedDictionaries = rules.length > 0;
+        const sharedNsSet = hasNamedDictionaries
+          ? new Set<string>()
+          : new Set(getSharedNamespaces());
+        const isDictionaryOwned = (fullKey: string): boolean => {
+          for (const rule of rules) {
+            const included = rule.include.some((p) => keyMatchesPattern(fullKey, p));
+            if (!included) continue;
+            const excluded = rule.exclude.some((p) => keyMatchesPattern(fullKey, p));
+            if (!excluded) return true;
+          }
+          return false;
+        };
+
         for (const extraNs of extrasNs) {
           if (extraNs === namespace) continue;
           if (bundle[extraNs]) continue;
+          // Inferred-shared namespaces don't ship in scope bundles.
+          if (!hasNamedDictionaries && sharedNsSet.has(extraNs)) continue;
+
           const extraData = readNamespaceFile(locale, extraNs);
-          if (extraData) {
+          if (!extraData) continue;
+
+          // Fully-owned namespaces are dropped (dictionary covers
+          // everything); partially-owned ones get pruned to their non-owned
+          // subset so the scope still ships what the dictionary doesn't
+          // cover; untouched namespaces (no rule matches) ship whole.
+          const flat = flattenKeys(extraData, extraNs);
+          const nonOwned = flat.filter((k) => !isDictionaryOwned(k));
+          if (nonOwned.length === 0) continue;
+
+          if (nonOwned.length < flat.length) {
+            const subkeys = nonOwned.map((k) => k.slice(extraNs.length + 1));
+            bundle[extraNs] = pruneNamespace(extraData, subkeys);
+          } else {
             bundle[extraNs] = extraData;
           }
         }

@@ -260,6 +260,270 @@ describe('i18nDevPlugin', () => {
     expect(body.vendors).toEqual({ compact: { name: 'Vendor' } });
   });
 
+  it('lean bundles respect dictionary ownership — dict-owned keys are not duplicated at the top level', () => {
+    // Fixture: global dictionary owns all of shared.*. A page extracts
+    // `t('products.foo')` + `t('shared.common')`. With crossNamespacePacking
+    // the scope plan's extras would include `shared.common`, but since
+    // the dictionary already ships it, the dev bundle must NOT duplicate
+    // shared at the top level — matches prod's bundle-generator filter.
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/shared.json'),
+      JSON.stringify({ common: 'Common', other: 'Other' }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/products.json'),
+      JSON.stringify({ foo: 'Foo' }),
+    );
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/products'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/products/index.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function ProductsIndex() {',
+        "  const { t } = useI18n('products.index');",
+        "  return <div>{t('products.foo')}{t('shared.common')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+
+    const { middleware } = createPluginHarness(
+      { pages: ['src/pages/**/*.tsx'], defaultLocale: 'en' },
+      undefined,
+      {
+        dictionaries: { global: { include: ['shared.*'] } },
+        bundling: { crossNamespacePacking: true },
+      },
+    );
+    const { response } = runMiddleware(middleware, '/__i18n/en/products.index.json');
+    const body = JSON.parse(response.body);
+
+    expect(body.products).toEqual({ foo: 'Foo' });
+    // shared.* is dictionary-owned; lean extras path must filter it out
+    // entirely. No phantom `shared` entry in the bundle.
+    expect(body.shared).toBeUndefined();
+    expect(Object.keys(body)).not.toContain('shared');
+  });
+
+  it('lean bundles emit partial cross-ns namespace when only part of it is dictionary-owned', () => {
+    // Fixture: dictionary owns shared.foo specifically; shared.bar is not
+    // claimed. Page extracts both. The dev bundle should ship `shared.bar`
+    // as an extra (not dict-owned) and drop `shared.foo` (already in dict).
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/shared.json'),
+      JSON.stringify({ foo: 'Foo', bar: 'Bar' }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/products.json'),
+      JSON.stringify({ index: { heading: 'Products' } }),
+    );
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/products'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/products/index.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function ProductsIndex() {',
+        "  const { t } = useI18n('products.index');",
+        "  return <div>{t('products.index.heading')}{t('shared.foo')}{t('shared.bar')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+
+    const { middleware } = createPluginHarness(
+      { pages: ['src/pages/**/*.tsx'], defaultLocale: 'en' },
+      undefined,
+      {
+        dictionaries: { global: { include: ['shared.foo'] } },
+        bundling: { crossNamespacePacking: true },
+      },
+    );
+    const { response } = runMiddleware(middleware, '/__i18n/en/products.index.json');
+    const body = JSON.parse(response.body);
+
+    // Primary stays normal.
+    expect(body.products).toEqual({ index: { heading: 'Products' } });
+    // shared.bar ships as an extra (not dict-owned); shared.foo does NOT
+    // (dict already has it).
+    expect(body.shared).toEqual({ bar: 'Bar' });
+    expect(body.shared.foo).toBeUndefined();
+  });
+
+  it('topology B (no named dicts, inferred-shared namespace) — shared ns is excluded from scope bundles in the lean path', () => {
+    // Three routes all reference `shared.*` → shared becomes "shared-
+    // inferred" (>50% of routes). With no named dictionaries configured,
+    // prod emits a legacy `_dict/shared.json` and excludes shared.* from
+    // every scope bundle. Dev must match.
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/shared.json'),
+      JSON.stringify({ ok: 'OK', cancel: 'Cancel' }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/products.json'),
+      JSON.stringify({ show: { title: 'Details' } }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/cart.json'),
+      JSON.stringify({ summary: { total: 'Total' } }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/account.json'),
+      JSON.stringify({ profile: { name: 'Name' } }),
+    );
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/products'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/cart'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/account'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/products/show.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function P() {',
+        "  const { t } = useI18n('products.show');",
+        "  return <div>{t('products.show.title')}{t('shared.ok')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/cart/summary.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function C() {',
+        "  const { t } = useI18n('cart.summary');",
+        "  return <div>{t('cart.summary.total')}{t('shared.cancel')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/account/profile.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function A() {',
+        "  const { t } = useI18n('account.profile');",
+        "  return <div>{t('account.profile.name')}{t('shared.ok')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+
+    // Explicitly empty dictionaries — triggers the inferred-shared path.
+    const { middleware } = createPluginHarness(
+      { pages: ['src/pages/**/*.tsx'], defaultLocale: 'en' },
+      undefined,
+      { dictionaries: {}, bundling: { crossNamespacePacking: true } },
+    );
+    const { response } = runMiddleware(middleware, '/__i18n/en/products.show.json');
+    const body = JSON.parse(response.body);
+
+    expect(body.products).toEqual({ show: { title: 'Details' } });
+    // shared.* is inferred-shared — must NOT appear in the scope bundle.
+    expect(body.shared).toBeUndefined();
+  });
+
+  it('topology C (neither named dicts nor inferred-shared) — scope bundles ship only the route\'s primary extractions', () => {
+    // No named dicts. Multiple routes so the inferred-shared heuristic
+    // (>50% of routes use the namespace) doesn't trip for `products` —
+    // only one of three routes uses it. Matches prod: primary ns ships,
+    // tree-shaken to extracted keys.
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/products.json'),
+      JSON.stringify({ show: { title: 'Details', subtitle: 'Sub' } }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/cart.json'),
+      JSON.stringify({ summary: { total: 'Total' } }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/account.json'),
+      JSON.stringify({ profile: { name: 'Name' } }),
+    );
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/products'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/cart'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/account'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/products/show.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function P() {',
+        "  const { t } = useI18n('products.show');",
+        "  return <div>{t('products.show.title')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/cart/summary.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function C() {',
+        "  const { t } = useI18n('cart.summary');",
+        "  return <div>{t('cart.summary.total')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/account/profile.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function A() {',
+        "  const { t } = useI18n('account.profile');",
+        "  return <div>{t('account.profile.name')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+
+    const { middleware } = createPluginHarness(
+      { pages: ['src/pages/**/*.tsx'], defaultLocale: 'en' },
+      undefined,
+      { dictionaries: {} }, // explicitly empty — no named dicts
+    );
+    const { response } = runMiddleware(middleware, '/__i18n/en/products.show.json');
+    const body = JSON.parse(response.body);
+
+    expect(body.products).toEqual({ show: { title: 'Details' } });
+    // subtitle was never extracted — tree-shaken.
+    expect(body.products.show.subtitle).toBeUndefined();
+  });
+
+  it('full-namespace fallback path also filters dict-owned namespaces (leanBundles: false)', () => {
+    // Same bug exists in the v0.6.0 full-namespace behavior. With the
+    // lean opt-out engaged AND a dictionary fully claiming a cross-ns
+    // namespace, the full-namespace fallback must also skip the extra.
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/shared.json'),
+      JSON.stringify({ ok: 'OK', cancel: 'Cancel' }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/products.json'),
+      JSON.stringify({ show: { title: 'Details' } }),
+    );
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/products'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/products/show.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function ProductsShow() {',
+        "  const { t } = useI18n('products.show');",
+        "  return <div>{t('products.show.title')}{t('shared.ok')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+
+    const { middleware } = createPluginHarness(
+      { pages: ['src/pages/**/*.tsx'], defaultLocale: 'en' },
+      undefined,
+      {
+        dictionaries: { global: { include: ['shared.*'] } },
+        bundling: {
+          crossNamespacePacking: true,
+          dev: { leanBundles: false },
+        },
+      },
+    );
+    const { response } = runMiddleware(middleware, '/__i18n/en/_scope/products.json');
+    const body = JSON.parse(response.body);
+
+    // Full products namespace ships.
+    expect(body.products).toEqual({ show: { title: 'Details' } });
+    // Fully-owned shared namespace is skipped — dictionary covers it.
+    expect(body.shared).toBeUndefined();
+  });
+
   it('falls back to full namespace data when bundling.dev.leanBundles is explicitly false', () => {
     fs.writeFileSync(
       path.join(tmpDir, 'locales/en/vendors.json'),
