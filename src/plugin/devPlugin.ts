@@ -7,9 +7,18 @@ import { generateTypes } from '../extractor/type-generator';
 import type { I18nSharedConfig } from '../core/config';
 import { I18N_DEV_UPDATE_EVENT } from '../core/runtime-env';
 import { buildDevDiagnostics } from './devDiagnostics';
-import { walkAll } from '../extractor/walker';
+import { resolveImport, walkAll } from '../extractor/walker';
 import { buildScopePlans, inferScopeNamespace } from '../extractor/scope-bundles';
 import type { ProjectAnalysis } from '../extractor/walker-types';
+import {
+  createExtractionCache,
+  computeConfigHash,
+  type ExtractionCache,
+} from '../extractor/extraction-cache';
+import { resolveCacheConfig, type CacheOptionInput } from '../extractor/cache-config';
+import { extractKeys } from '../extractor/extract';
+import { PLUGIN_VERSION } from './version';
+import { buildScopeMap, type PageIdentifierFn } from '../extractor/scope-map';
 
 /**
  * Configuration for the i18n dev plugin.
@@ -79,15 +88,61 @@ export interface I18nDevPluginOptions {
   emitPublicAssets?: boolean;
   /** Show devtools toggle button and drawer. Default: true in dev. */
   devBar?: boolean;
+  /**
+   * Extraction cache control. Accepts:
+   * - `true` (or omitted): cache on with defaults
+   * - `false`: cache off
+   * - object: fine-grained control (see {@link CacheOptionInput})
+   *
+   * The extraction cache persists AST analysis between runs so warm dev
+   * starts skip the walk. Env vars (`VITE_I18N_NO_CACHE`,
+   * `VITE_I18N_CLEAR_CACHE`, `VITE_I18N_CACHE_DEBUG`) always take precedence.
+   */
+  cache?: CacheOptionInput;
+  /**
+   * Custom page identifier resolver. Mirrors the build plugin option so
+   * the dev-served `/__i18n/scope-map.json` uses the same keys as the
+   * built asset.
+   */
+  pageIdentifier?: PageIdentifierFn;
 }
 
 const DEV_EMITTED_FILES_MANIFEST = '.vite-bundled-i18n-dev-files.json';
+
+/** Wrap a function so it only runs once, even if invoked from multiple exit hooks. */
+function onceFactory(fn: () => void): () => void {
+  let called = false;
+  return () => {
+    if (called) return;
+    called = true;
+    try { fn(); } catch { /* swallow — best-effort on shutdown */ }
+  };
+}
+
+/**
+ * Fast rejection filter for the transform hook. Vite calls `transform` for
+ * every module it processes, including virtual ids, assets, and deps from
+ * `node_modules`. We only care about user source files that could contain
+ * `t()` / `useI18n()` calls.
+ */
+const EXTRACTABLE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs']);
+function shouldExtractId(id: string, rootDir: string): boolean {
+  if (!id) return false;
+  if (id.startsWith('\0')) return false;            // virtual module
+  if (id.includes('?')) return false;               // Vite query params
+  if (!path.isAbsolute(id)) return false;           // bare specifiers, data: urls, etc.
+  if (id.includes(`${path.sep}node_modules${path.sep}`)) return false;
+  if (!id.startsWith(rootDir + path.sep) && id !== rootDir) return false;
+  return EXTRACTABLE_EXTENSIONS.has(path.extname(id));
+}
 export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPluginOptions): Plugin {
   let projectRoot = '';
   let publicAssetsDir: string | undefined;
   let typesOutPath = '';
   let logger: ResolvedConfig['logger'] | undefined;
   let warnedAboutMissingPublicDir = false;
+  let extractionCache: ExtractionCache | undefined;
+  let persistCacheOnce: (() => void) | undefined;
   let pendingAddRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingAddRefresh:
     | {
@@ -117,6 +172,10 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
   // locale or page source files change. Keyed by scope string.
   let cachedExtrasByScope: Map<string, Set<string>> | undefined;
   let cachedExtrasByNamespace: Map<string, Set<string>> | undefined;
+
+  // Cached scope-map payload. Invalidated alongside diagnostics so the
+  // transform hook's "keys changed" signal naturally refreshes it.
+  let cachedScopeMap: ReturnType<typeof buildScopeMap> | undefined;
 
   function getRequestPath(url: string): string {
     const queryIndex = url.indexOf('?');
@@ -207,6 +266,7 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
         localesDir: config.localesDir,
         extractionScope: options?.extractionScope ?? 'global',
         sharedConfig: config,
+        cache: extractionCache,
       });
     }
     return cachedDiagnostics;
@@ -216,6 +276,46 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
     cachedDiagnostics = undefined;
     cachedExtrasByScope = undefined;
     cachedExtrasByNamespace = undefined;
+    cachedScopeMap = undefined;
+  }
+
+  function getScopeMapPayload(): ReturnType<typeof buildScopeMap> {
+    if (cachedScopeMap) return cachedScopeMap;
+
+    // If pages aren't configured we can't walk; emit a valid but empty map.
+    if (!options?.pages || options.pages.length === 0) {
+      cachedScopeMap = {
+        version: 1,
+        defaultLocale,
+        pages: {},
+      };
+      return cachedScopeMap;
+    }
+
+    try {
+      const analysis = walkAll({
+        pages: options.pages,
+        rootDir: projectRoot,
+        localesDir: resolveLocalesPath(),
+        defaultLocale,
+        extractionScope: options?.extractionScope ?? 'global',
+        hookSources: config.extraction?.hookSources,
+        cache: extractionCache,
+      });
+      cachedScopeMap = buildScopeMap(analysis, {
+        rootDir: projectRoot,
+        defaultLocale,
+        dictionaries: config.dictionaries,
+        pageIdentifier: options?.pageIdentifier,
+      });
+    } catch {
+      cachedScopeMap = {
+        version: 1,
+        defaultLocale,
+        pages: {},
+      };
+    }
+    return cachedScopeMap;
   }
 
   /**
@@ -253,6 +353,7 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
             defaultLocale,
             extractionScope: options?.extractionScope ?? 'global',
             hookSources: config.extraction?.hookSources,
+            cache: extractionCache,
           });
         } catch {
           return { byScope: cachedExtrasByScope, byNamespace: cachedExtrasByNamespace };
@@ -301,9 +402,25 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
 
   function regenerateTypes() {
     try {
+      // Fold page-scope metadata into the generated types when available,
+      // so `PAGE_SCOPE_MAP` / `I18nPageIdentifier` stay in sync with what
+      // the runtime endpoint reports. Falls back to a bare scope list when
+      // pages aren't configured.
+      const scopeMap = getScopeMapPayload();
+      const pageScopeMap: Record<string, readonly string[]> = {};
+      const scopes = new Set<string>();
+      for (const [id, entry] of Object.entries(scopeMap.pages)) {
+        pageScopeMap[id] = entry.scopes;
+        for (const s of entry.scopes) scopes.add(s);
+      }
       writeTextFileIfChanged(
         resolveTypesOutPath(),
-        generateTypes(resolveLocalesPath(), defaultLocale),
+        generateTypes(
+          resolveLocalesPath(),
+          defaultLocale,
+          scopes.size > 0 ? [...scopes].sort() : undefined,
+          Object.keys(pageScopeMap).length > 0 ? pageScopeMap : undefined,
+        ),
       );
     } catch {
       // Silently skip if locales dir doesn't exist yet
@@ -532,11 +649,100 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
         },
       };
     },
+    /**
+     * Piggyback on Vite's transform pipeline to keep the extraction cache
+     * warm without a separate parse. Vite already tokenized this file for
+     * its own pipeline; extracting translation keys is cheap by comparison.
+     *
+     * We never modify the returned code (`return null`).
+     */
+    transform(code, id) {
+      if (!extractionCache) return null;
+      if (!shouldExtractId(id, projectRoot)) return null;
+
+      let stat: fs.Stats;
+      try { stat = fs.statSync(id); } catch { return null; }
+
+      const previous = extractionCache.get(id);
+      if (
+        previous &&
+        previous.mtime === stat.mtimeMs &&
+        previous.size === stat.size
+      ) {
+        return null;
+      }
+
+      const extraction = extractKeys(code, {
+        scope: options?.extractionScope ?? 'global',
+        filePath: id,
+        hookSources: config.extraction?.hookSources,
+        keyFields: config.extraction?.keyFields,
+      });
+
+      const resolvedImports: string[] = [];
+      for (const imp of extraction.imports) {
+        const resolvedImport = resolveImport(imp, id, projectRoot);
+        if (resolvedImport) resolvedImports.push(resolvedImport);
+      }
+
+      extractionCache.set(id, {
+        mtime: stat.mtimeMs,
+        size: stat.size,
+        imports: resolvedImports,
+        keys: extraction.keys,
+        scopes: extraction.scopes,
+      });
+
+      // Invalidate diagnostics + extras indexes if keys or scopes actually
+      // changed — a no-op transform (whitespace edits, reformatting) should
+      // not trigger a walk on the next scope-bundle request.
+      const previousKeys = previous?.keys.map((k) => k.key).sort().join('|') ?? '';
+      const newKeys = extraction.keys.map((k) => k.key).sort().join('|');
+      const previousScopes = (previous?.scopes ?? []).slice().sort().join('|');
+      const newScopes = extraction.scopes.slice().sort().join('|');
+
+      if (previousKeys !== newKeys || previousScopes !== newScopes) {
+        invalidateDiagnosticsCache();
+      }
+
+      return null;
+    },
     configResolved(resolvedConfig) {
       projectRoot = resolvedConfig.root;
       typesOutPath = resolveTypesOutPath();
       logger = resolvedConfig.logger;
       publicAssetsDir = resolvePublicAssetsDir(resolvedConfig);
+
+      const cacheSettings = resolveCacheConfig(options?.cache, { rootDir: projectRoot });
+      if (cacheSettings.enabled) {
+        if (cacheSettings.clearBeforeStart) {
+          try {
+            fs.rmSync(cacheSettings.dir, { recursive: true, force: true });
+          } catch {
+            // Non-fatal — fall through to a fresh cache.
+          }
+        }
+        extractionCache = createExtractionCache({
+          dir: cacheSettings.dir,
+          pluginVersion: PLUGIN_VERSION,
+          configHash: computeConfigHash({
+            pages: options?.pages,
+            defaultLocale,
+            extractionScope: options?.extractionScope ?? 'global',
+            hookSources: config.extraction?.hookSources,
+            keyFields: config.extraction?.keyFields,
+            dictionaries: config.dictionaries,
+            crossNamespacePacking: config.bundling?.crossNamespacePacking,
+          }),
+          debug: cacheSettings.debug,
+        });
+
+        if (cacheSettings.persist) {
+          persistCacheOnce = onceFactory(() => extractionCache?.persistToDisk());
+          process.once('beforeExit', persistCacheOnce);
+          process.once('exit', persistCacheOnce);
+        }
+      }
     },
     configureServer(server) {
       const localesPath = resolveLocalesPath();
@@ -651,6 +857,17 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
           res.setHeader('Content-Type', 'application/json');
           res.setHeader('Cache-Control', 'no-cache');
           res.end(json);
+          return;
+        }
+
+        // scope-map — keyed by whatever pageIdentifier returned. Handled
+        // before the greedy `{locale}/(.+).json` matcher below which would
+        // otherwise capture it as locale="scope-map", scope="".
+        if (relativePath === 'scope-map.json') {
+          const map = getScopeMapPayload();
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.end(JSON.stringify(map));
           return;
         }
 

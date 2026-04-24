@@ -178,4 +178,42 @@ describe('scope type generation', () => {
     const output = generateTypes(localesDir, 'en');
     expect(output).toContain('// No scopes found');
   });
+
+  it('emits I18nPageIdentifier as a union literal and PAGE_SCOPE_MAP const when a map is provided', () => {
+    writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK' }));
+    const localesDir = path.join(tmpDir, 'locales');
+    const output = generateTypes(localesDir, 'en', ['products.index', 'cart.index'], {
+      'products/show': ['products.index'],
+      'cart/index': ['cart.index'],
+    });
+
+    expect(output).toContain(
+      `export type I18nPageIdentifier = 'cart/index' | 'products/show';`,
+    );
+    expect(output).toContain('export const PAGE_SCOPE_MAP: {');
+    expect(output).toContain(
+      'readonly [K in I18nPageIdentifier]: readonly (keyof I18nScopeMap & string)[];',
+    );
+    expect(output).toContain(`'cart/index': ['cart.index'],`);
+    expect(output).toContain(`'products/show': ['products.index'],`);
+    expect(output).toContain('} as const;');
+  });
+
+  it('falls back to string type and empty PAGE_SCOPE_MAP when no page map is provided', () => {
+    writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK' }));
+    const output = generateTypes(path.join(tmpDir, 'locales'), 'en');
+    expect(output).toContain('export type I18nPageIdentifier = string;');
+    expect(output).toContain(
+      'export const PAGE_SCOPE_MAP: Readonly<Record<string, readonly string[]>> = {};',
+    );
+  });
+
+  it('escapes single quotes in page identifier keys and scope values', () => {
+    writeFile('locales/en/shared.json', JSON.stringify({ ok: 'OK' }));
+    const output = generateTypes(path.join(tmpDir, 'locales'), 'en', undefined, {
+      "admin/it's-a-trap": ["scope'with-quote"],
+    });
+    expect(output).toContain(`'admin/it\\'s-a-trap'`);
+    expect(output).toContain(`'scope\\'with-quote'`);
+  });
 });

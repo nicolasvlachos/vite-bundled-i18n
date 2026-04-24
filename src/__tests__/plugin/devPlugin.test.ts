@@ -132,6 +132,7 @@ function createPluginHarness(
     : (resolvedConfigOverrides?.publicDir ?? path.join(tmpDir, 'public'));
 
   return {
+    plugin,
     middleware,
     publicAssetsDir: path.join(publicDir, options?.assetsDir ?? '__i18n'),
     watcherAdd,
@@ -253,6 +254,71 @@ describe('i18nDevPlugin', () => {
     expect(body.giftcards).toEqual({ show: { title: 'Gift card' } });
     // Extras namespace is included (full data — dev doesn't tree-shake).
     expect(body.vendors).toEqual({ compact: { name: 'Vendor' }, full: { bio: 'Bio' } });
+  });
+
+  it('serves /__i18n/scope-map.json with page entries derived from pages glob', () => {
+    const { middleware } = createPluginHarness({
+      pages: ['src/pages/**/*.tsx'],
+      defaultLocale: 'en',
+    });
+    const { response, next } = runMiddleware(middleware, '/__i18n/scope-map.json');
+
+    expect(next).not.toHaveBeenCalled();
+    expect(response.headers['Content-Type']).toBe('application/json');
+
+    const map = JSON.parse(response.body);
+    expect(map.version).toBe(1);
+    expect(map.defaultLocale).toBe('en');
+    // ProductsPage.tsx is in src/pages/ with no subdirectory — default
+    // identifier strips the prefix and the .tsx, leaving 'ProductsPage'.
+    expect(map.pages['ProductsPage']).toBeDefined();
+    expect(map.pages['ProductsPage'].scopes).toContain('products.index');
+    expect(map.pages['ProductsPage'].dictionaries).toEqual(['global']);
+  });
+
+  it('returns an empty scope-map when pages is not configured', () => {
+    const { middleware } = createPluginHarness();
+    const { response } = runMiddleware(middleware, '/__i18n/scope-map.json');
+
+    const map = JSON.parse(response.body);
+    expect(map.version).toBe(1);
+    expect(map.pages).toEqual({});
+  });
+
+  it('honors custom pageIdentifier in the dev response', () => {
+    const { middleware } = createPluginHarness({
+      pages: ['src/pages/**/*.tsx'],
+      defaultLocale: 'en',
+      pageIdentifier: (abs) => `custom:${path.basename(abs, '.tsx')}`,
+    });
+    const { response } = runMiddleware(middleware, '/__i18n/scope-map.json');
+
+    const map = JSON.parse(response.body);
+    expect(Object.keys(map.pages)).toEqual(['custom:ProductsPage']);
+  });
+
+  it('transform hook returns null for source files and rejects irrelevant ids', () => {
+    const { plugin } = createPluginHarness(
+      { pages: ['src/pages/**/*.tsx'], defaultLocale: 'en', cache: true },
+    );
+
+    const transformFn = (plugin as unknown as {
+      transform?: (code: string, id: string) => unknown;
+    }).transform;
+    expect(typeof transformFn).toBe('function');
+
+    // Source file — returns null (never modifies code).
+    const srcPath = path.join(tmpDir, 'src/pages/ProductsPage.tsx');
+    expect(transformFn!.call(plugin, fs.readFileSync(srcPath, 'utf-8'), srcPath)).toBeNull();
+
+    // Virtual module — short-circuits without reading from disk.
+    expect(transformFn!.call(plugin, '', '\0virtual:i18n')).toBeNull();
+
+    // node_modules — rejected by the fast-path filter.
+    expect(transformFn!.call(plugin, '', path.join(tmpDir, 'node_modules', 'react', 'index.js'))).toBeNull();
+
+    // Non-JS asset — rejected.
+    expect(transformFn!.call(plugin, 'body { color: red }', path.join(tmpDir, 'src/styles.css'))).toBeNull();
   });
 
   it('does not inline extras into scope bundle responses when crossNamespacePacking is off', () => {

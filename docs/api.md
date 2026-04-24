@@ -311,6 +311,151 @@ Keys whose namespace is already owned by a dictionary are **not** inlined — di
 
 **Devtools:** key-usage entries are tagged with the active scope (set automatically by `useI18n(scope)` on every render). The devtools "Missing Translations" panel filters entries to the current scope so navigating between pages doesn't leave stale misses behind. Entries are also tagged with an epoch that bumps on locale change, so switching locales clears the slate. Call `instance.resetKeyUsage()` from host-app navigation hooks for an explicit reset.
 
+### Page scope map
+
+At build time the plugin emits `__i18n/scope-map.json` — a framework-neutral index of `page id → { scopes, dictionaries }`. In dev the same payload is served at `/__i18n/scope-map.json`. The generated types also include a typed `PAGE_SCOPE_MAP` const and a `I18nPageIdentifier` literal union, importable from `vite-bundled-i18n/generated`.
+
+Consumers use this inside their router's async page-resolve hook to kick off scope loads *in parallel* with component resolution:
+
+```ts
+// Sketch — adapt to your router's resolve API
+import { PAGE_SCOPE_MAP, type I18nPageIdentifier } from 'vite-bundled-i18n/generated';
+import { i18n } from './i18n';
+
+async function resolvePage(pageId: I18nPageIdentifier, loadComponent: () => Promise<unknown>) {
+  const scopes = PAGE_SCOPE_MAP[pageId];
+  await Promise.all([
+    loadComponent(),
+    ...scopes.map((scope) => i18n.loadScope(i18n.getLocale(), scope)),
+  ]);
+}
+```
+
+**Custom identifiers.** The default page identifier strips `src/pages/` and common `.tsx` / `.page.tsx` suffixes:
+
+```
+src/pages/giftcards/show.tsx       → "giftcards/show"
+src/pages/products/show.page.tsx   → "products/show"
+```
+
+Override with `pageIdentifier` on the plugin options when your router exposes a different token at runtime:
+
+```ts
+i18nPlugin(config, {
+  pages: ['admin/**/pages/*.tsx'],
+  locales: ['en'],
+  defaultLocale: 'en',
+  pageIdentifier: (abs) => {
+    // Produce whatever your router returns at matched-page time.
+    return abs.replace(/^.*?\/admin\//, 'admin/').replace(/\.tsx$/, '');
+  },
+})
+```
+
+Whatever string your function returns is the key in `scope-map.json`, `PAGE_SCOPE_MAP`, and the `I18nPageIdentifier` union. Consumers can then do `PAGE_SCOPE_MAP[router.currentRoute.id]` with full type safety.
+
+**Shape on disk:**
+
+```jsonc
+{
+  "version": 1,
+  "defaultLocale": "en",
+  "pages": {
+    "giftcards/show": {
+      "scopes": ["giftcards.show"],
+      "dictionaries": ["global"]
+    },
+    "cart/index": {
+      "scopes": ["cart.index", "cart.summary"],
+      "dictionaries": ["global"]
+    }
+  }
+}
+```
+
+`dictionaries` lists every dictionary name configured for the app — dictionaries are app-wide, so the list is identical for every page. Included as a convenience for consumers that want a single source of truth for "what to preload".
+
+Gated by `emitReports` at build time (static file is skipped when reports are disabled). The dev middleware endpoint is always on.
+
+### `loadScope` concurrency
+
+`instance.loadScope(locale, scope)` guarantees:
+
+- Concurrent calls for the same `(locale, scope)` share a single in-flight promise. One hundred parallel `loadScope('en', 'products')` calls fire exactly one HTTP request and resolve together.
+- An already-loaded scope returns a resolved promise (microtask) — no network.
+- On fetch failure the in-flight entry is cleared so a retry starts fresh.
+
+This makes it safe to call `loadScope` from inside your router's async resolve hook without coordinating across components. Side effects (cache writes, `setActiveScope`, diagnostics) run once per logical load, not once per caller.
+
+### Extraction cache (`cache`)
+
+AST analysis is expensive on large codebases. The plugin persists per-file extraction results to `.i18n/cache/extraction-v1.json` and skips parsing any file whose `mtime` + `size` hasn't changed since the last run. On warm dev starts the entire walk reduces to a handful of `stat` calls — typically 10–50 ms regardless of project size.
+
+The cache is on by default. The behavior is identical to v0.4.0 when the cache is disabled, so you never lose correctness, only speed.
+
+```ts
+// Default — cache enabled
+i18nPlugin(config, {
+  pages: [...],
+  locales: ['en', 'bg'],
+  defaultLocale: 'en',
+})
+
+// Disable
+i18nPlugin(config, {
+  pages: [...],
+  locales: ['en', 'bg'],
+  defaultLocale: 'en',
+  cache: false,
+})
+
+// Fine-grained
+i18nPlugin(config, {
+  ...,
+  cache: {
+    enabled: true,
+    dir: '.i18n/cache',   // default; override for monorepo packages
+    persist: true,         // set false for ephemeral envs
+  },
+})
+```
+
+**Automatic invalidation.** The cache file carries a header (`pluginVersion`, `configHash`, `nodeVersion`, `schemaVersion`). Any mismatch on load discards the snapshot entirely:
+
+- Plugin upgrade → cache rebuilt
+- Config edit (`dictionaries`, `pages`, `hookSources`, `keyFields`, `bundling.crossNamespacePacking`, `extractionScope`) → cache rebuilt
+- Node major version change → cache rebuilt
+- Corrupt or unreadable file → treated as cold start
+
+Per-file `mtime` + `size` covers everyday editing.
+
+**Manual bypass.** Env vars always win over config — handy for one-off troubleshooting:
+
+| Variable | Effect |
+|---|---|
+| `VITE_I18N_NO_CACHE=1` | Disable the cache for this process — skip both read and write |
+| `VITE_I18N_CLEAR_CACHE=1` | Delete `.i18n/cache/` before start, then run normally |
+| `VITE_I18N_CACHE_DEBUG=1` | Stream cache hits/misses to stderr |
+
+CLI flags mirror the env vars:
+
+```bash
+npx vite-bundled-i18n build --no-cache
+npx vite-bundled-i18n analyze --clear-cache
+```
+
+**Dev-mode HMR integration.** During `vite dev` the plugin registers a `transform` hook that piggybacks on Vite's own parse pipeline. When Vite transforms a source file (cold load or HMR), the cache entry for that file is refreshed in-place. No extra AST parse — we reuse Vite's tokenization.
+
+**CI builds.** The cache is on by default in CI too. If your runner persists `.i18n/cache/` between builds (most monorepo tools do), `vite build` becomes near-instant when nothing changed. If the directory is ephemeral, the cache is simply empty and the behavior matches v0.4.0.
+
+**`.gitignore`.** The cache is a local artifact — don't commit it. Add:
+
+```gitignore
+.i18n/cache/
+```
+
+**Tests.** `NODE_ENV=test` disables the cache by default so test isolation is preserved. Override with an explicit `cache: true` if you need the cache active during tests.
+
 ### `defineI18nData(data)` and `i18nKey(key)`
 
 Helpers for serializable data/config modules:

@@ -61,6 +61,8 @@ export function i18nPlugin(
       typesOutPath: options?.typesOutPath,
       emitPublicAssets: options?.dev?.emitPublicAssets,
       devBar: options?.dev?.devBar,
+      cache: options?.cache,
+      pageIdentifier: options?.pageIdentifier,
     }),
   ];
 

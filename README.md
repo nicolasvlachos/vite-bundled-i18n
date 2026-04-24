@@ -22,24 +22,46 @@ Layout.tsx        ──→  Dictionary rules   ──→   __i18n/en/_dict/glob
                        Type generation    ──→   .i18n/i18n-generated.ts        (full autocomplete)
 ```
 
-**Three layers:**
-
-1. **Build-time analysis** — AST extractor walks your import graph, finds every `t()`, `useI18n()`, `i18nKey()` call, and maps keys to routes. No code execution needed.
-2. **Bundle generation** — keys are grouped into scope bundles (per-page) and dictionary bundles (shared/global). Each bundle is a static JSON asset or compiled JS module.
-3. **Thin runtime** — minimal `t()` function that loads the right bundle on demand. React, Vue, and vanilla adapters are ~50 lines each.
+The Vite plugin parses your import graph, maps every `t()` / `useI18n()` / `i18nKey()` call to the route that reached it, and emits per-route JSON plus optional compiled `Map` modules. The runtime is a thin `t()` that loads the right bundle on demand. React, Vue, and vanilla adapters all share a ~50-line core.
 
 ## Features
 
-- **Scope bundles** — each route loads only its own translations, one HTTP request
-- **Cross-namespace packing** (opt-in) — inline a route's cross-namespace keys (tree-shaken) into its scope bundle, so 1–3 foreign keys don't force a whole dictionary to load globally
-- **Dictionary ownership** — named dictionaries claim keys by pattern (`include`/`exclude`/`priority`)
+### What makes it different
+
+- **Scope bundles** — each route loads only its own translations in one HTTP request
+- **Page scope map** — framework-neutral `scope-map.json` + typed `PAGE_SCOPE_MAP` const, so any router can parallelize scope loads with component resolution ([router integration](#router-integration))
+- **Cross-namespace packing** (opt-in) — inline a route's cross-namespace keys, tree-shaken, into its scope bundle. 1–3 foreign keys don't force a whole dictionary to load globally
+- **Persistent extraction cache** — per-file AST results survive between runs. Warm dev starts in ~250 ms instead of 3–10 s; repeat builds skip the walk when nothing changed
 - **Progressive autocomplete** — generated types let the IDE suggest one key segment at a time
-- **Placeholder validation** — `t('cart.total', { amount: 9.99 })` is type-checked against `{{amount}}` in the JSON
-- **Compiled production mode** — optional `Map`-based modules for O(1) lookups without JSON parsing
-- **Multi-framework** — React, Vue, and vanilla JS share a single core
-- **SSR** — server-side rendering with automatic client hydration via `window.__I18N_RESOURCES__`
-- **AST extraction** — finds keys in `t()`, `useI18n()`, `i18nKey()`, `defineI18nData()`, configurable `keyFields`, `as const` objects, string enums, and helper functions that receive `t` as a parameter
-- **Dev toolbar** — dark-mode drawer showing per-page key usage, bundle efficiency (keys used vs loaded), missing translations, and namespace residency
+
+### Also included
+
+- **Dictionary ownership** — named dictionaries claim keys by `include` / `exclude` / `priority`, pinned in memory
+- **Placeholder validation** — `t('cart.total', { amount })` is type-checked against `{{amount}}` in the JSON
+- **Compiled mode** — optional `Map`-based modules for O(1) lookups without JSON parsing
+- **Multi-framework** — React, Vue, vanilla JS share a single core
+- **SSR** — server rendering with automatic client hydration via `window.__I18N_RESOURCES__`
+- **AST extraction** — `t()`, `useI18n()`, `i18nKey()`, `defineI18nData()`, configurable `keyFields`, `as const` objects, string enums, helper functions that receive `t` as a parameter
+- **Dev toolbar** — scope-aware missing-key panel (filters by current route, resets on locale change and HMR), per-namespace bundle efficiency, live updates on navigation
+
+## Performance
+
+The library is a performance play end-to-end. Representative numbers for a 50-page admin panel with 3,000 translation keys:
+
+| | Traditional i18n | vite-bundled-i18n |
+|---|---|---|
+| Keys per page load | 3,000 (all) | 25–40 (route-extracted) |
+| Bundle size per scope | N/A (monolithic) | ~97% smaller than the source namespace |
+| HTTP requests per route | many (or one huge) | 1 scope bundle + cached dictionaries |
+| Cold dev start | — | ~200 ms |
+| Warm dev start | — | ~250 ms (extraction cache keeps prior AST parses) |
+| Repeat `vite build`, unchanged code | full walk | near-zero parse (cache-hit, stat-only) |
+| HMR key edit → browser refetch | full re-walk | ~30 ms (surgical cache update) |
+| Compiled-mode `t('key')` | JSON parse + path traversal | O(1) `Map.get` |
+
+The extraction cache persists to `.i18n/cache/` and auto-invalidates on plugin upgrade, config change, or Node major version change. Disable with `cache: false` or `VITE_I18N_NO_CACHE=1`. See [API docs — Extraction cache](./docs/api.md#extraction-cache-cache).
+
+Compiled mode replaces JSON parsing with pre-resolved flat `Map` modules. Faster than JSON at the browser level (no parse on first lookup), smaller gzipped (shared string pool), cacheable by the browser's module loader. Falls back to JSON automatically when compiled modules aren't available.
 
 ## Setup
 
@@ -153,6 +175,56 @@ function ProductsPage() {
 
 **Navigation lifecycle:** The provider persists across page navigations (Inertia, React Router, Next.js). Dictionaries load once. Each page scope loads on mount — only the page content waits, not the layout.
 
+## Router Integration
+
+`useI18n('products.show')` triggers the scope load on mount — but mount only happens *after* the router has resolved the matched component. On slow connections this serializes the scope fetch behind the component chunk. `PAGE_SCOPE_MAP` unblocks this: the scope list for every page is a build-time constant, fully typed, importable anywhere.
+
+Combine it with your router's async page-resolve hook and `Promise.all` so both promises race in parallel:
+
+```ts
+import {
+  PAGE_SCOPE_MAP,
+  type I18nPageIdentifier,
+} from 'vite-bundled-i18n/generated'
+import { i18n } from './i18n'
+
+// Sketch — adapt to your router's resolve API
+async function resolvePage(
+  pageId: I18nPageIdentifier,
+  loadComponent: () => Promise<unknown>,
+) {
+  const scopes = PAGE_SCOPE_MAP[pageId]
+  const locale = i18n.getLocale()
+  await Promise.all([
+    loadComponent(),
+    ...scopes.map((scope) => i18n.loadScope(locale, scope)),
+  ])
+}
+```
+
+Calling `loadScope` is safe from concurrent paths. The runtime deduplicates by `(locale, scope)` — 100 parallel calls fire exactly one fetch, share the same promise, and resolve together. On fetch failure the in-flight entry clears, so a retry starts fresh. Side effects (cache writes, devbar state, dependent scope flags) run once per logical load, not once per caller.
+
+**Page identifiers.** The default strips `src/pages/` and common `.tsx` / `.page.tsx` suffixes:
+
+```
+src/pages/giftcards/show.tsx       → 'giftcards/show'
+src/pages/products/show.page.tsx   → 'products/show'
+```
+
+When your router exposes a different token at runtime, override:
+
+```ts
+i18nPlugin(config, {
+  pages: ['admin/**/pages/*.tsx'],
+  locales: ['en'],
+  defaultLocale: 'en',
+  pageIdentifier: (abs) =>
+    abs.replace(/^.*?\/admin\//, 'admin/').replace(/\.tsx$/, ''),
+})
+```
+
+Whatever your function returns becomes the key in `scope-map.json` (served at `/__i18n/scope-map.json` in dev, emitted at build under `assetsDir`) and the `I18nPageIdentifier` union in generated types. Routers that want the data without types can fetch the JSON directly.
+
 ## Vue
 
 ```ts
@@ -258,6 +330,7 @@ The build generates reports that show exactly what was extracted, what's missing
 - `unused.json` — keys in locale files that no route references (candidates for removal)
 - `stats.json` — per-route and per-namespace extraction statistics
 - `ownership.json` — which dictionary owns which key, with collision data
+- `scope-map.json` — framework-neutral `page id → { scopes, dictionaries }` index ([router integration](#router-integration))
 
 ### Edge cases
 
@@ -268,6 +341,7 @@ Keys that the AST extractor **cannot see** (dynamic concatenation, computed keys
 ```
 __i18n/{locale}/_dict/{name}.json      — dictionary bundles (JSON)
 __i18n/{locale}/{scope}.json           — scope bundles (JSON)
+__i18n/scope-map.json                  — page id → scopes index
 __i18n/compiled/manifest.js            — compiled module manifest
 __i18n/compiled/{locale}/...           — compiled Map modules (optional)
 ```
@@ -290,7 +364,9 @@ React and Vue adapters detect and consume the hydrated data automatically.
 
 Translation bundles are served via Vite middleware — no files written to disk. Types regenerate on locale file changes. The dev toolbar updates live on navigation.
 
-For sidecar setups (Laravel serving assets from public/):
+**Dev toolbar behavior (v0.4.0+).** Missing-key entries are tagged with the current scope and a monotonic epoch. Navigating between pages automatically filters the "Missing Translations" panel to show only misses from the current route. Changing locale bumps the epoch so prior entries clear. HMR updates reset key-usage state automatically — editing a file doesn't leave stale misses behind.
+
+**Sidecar setups** (Laravel serving assets from public/):
 
 ```ts
 i18nPlugin(i18nConfig, {
@@ -351,12 +427,19 @@ cache: {
 | `vite-bundled-i18n/vanilla` | `getTranslations`, `initI18n` |
 | `vite-bundled-i18n/server` | `initServerI18n` (SSR) |
 | `vite-bundled-i18n/plugin` | Vite plugin (`i18nPlugin`) |
+| `vite-bundled-i18n/generated` | Generated types + `PAGE_SCOPE_MAP` / `I18nPageIdentifier` |
 
 ## Documentation
 
 - [Getting Started](./docs/getting-started.md)
 - [API Reference](./docs/api.md)
 - [Architecture](./docs/architecture.md)
+
+## Releases
+
+Current release: **v0.5.0** — persistent extraction cache, framework-neutral page scope map, typed `PAGE_SCOPE_MAP`, `loadScope` concurrency guarantees.
+
+Version history lives in the [git log](https://github.com/nicolasvlachos/vite-bundled-i18n/commits/main) — each release is a `feat: v{version}` commit with a summary of the changes.
 
 ## License
 

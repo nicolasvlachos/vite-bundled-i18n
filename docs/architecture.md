@@ -29,12 +29,25 @@ The Vite plugin walks your page entry points, follows their import graphs, and e
 Main modules:
 - `src/extractor/walker.ts` — import graph traversal
 - `src/extractor/extract.ts` — AST key extraction
+- `src/extractor/extraction-cache.ts` — per-file AST cache backed by a JSON snapshot on disk
+- `src/extractor/cache-config.ts` — resolves cache behavior from config + env + CLI flags
 - `src/extractor/scope-bundles.ts` — route-to-bundle mapping
 - `src/extractor/bundle-generator.ts` — JSON asset emission
 - `src/extractor/compiler.ts` — compiled JS module emission
 - `src/extractor/type-generator.ts` — TypeScript type generation
 - `src/extractor/dictionary-ownership.ts` — key ownership resolution
 - `src/extractor/reports.ts` — analysis report generation
+
+**Extraction cache flow.** On every walker invocation the cache sits between the walker and `extractKeys`:
+
+1. Walker calls `visit(filePath)` for each file in the import graph
+2. Walker `stat`s the file (mtime + size)
+3. Walker consults the cache — if entry exists and both match disk, the walker reuses cached keys/scopes/imports and skips the AST parse
+4. On miss, walker parses the source, extracts keys, resolves imports to absolute paths, and writes back to the cache
+
+The cache file (`.i18n/cache/extraction-v1.json`) carries a header (`pluginVersion`, `configHash`, `nodeVersion`, `schemaVersion`). Any mismatch discards the snapshot on load. See the [API docs](./api.md#extraction-cache-cache) for configuration and bypass options.
+
+**Dev HMR.** During `vite dev` the dev plugin registers a `transform` hook that refreshes cache entries as Vite transforms source files. No extra AST parse — we piggyback on Vite's own pipeline. When keys or scopes actually change in a file, the diagnostics/extras indexes are invalidated so the next scope-bundle request rebuilds them (cheaply — warm cache means the rebuild is mostly stat calls).
 
 ### 2. Thin Runtime (framework-agnostic core)
 

@@ -134,6 +134,55 @@ describe('createBundleLoader', () => {
       expect(mockFetch).toHaveBeenCalledOnce();
       expect(cache.isScopeLoaded('en', 'products')).toBe(true);
     });
+
+    it('100 parallel loadScope calls for the same (locale, scope) collapse to a single fetch', async () => {
+      let resolveFirst!: (v: Response) => void;
+      mockFetch.mockReturnValueOnce(
+        new Promise<Response>((resolve) => { resolveFirst = resolve; }),
+      );
+
+      const promises = Array.from({ length: 100 }, () =>
+        loader.loadScope('en', 'products'),
+      );
+
+      resolveFirst(jsonResponse({ products: { title: 'Products' } }));
+      await Promise.all(promises);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(cache.isScopeLoaded('en', 'products')).toBe(true);
+    });
+
+    it('loadScope on an already-loaded scope resolves without firing a new fetch', async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ products: { title: 'Products' } }),
+      );
+      await loader.loadScope('en', 'products');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      // Subsequent calls — any number of them — are no-ops.
+      await Promise.all([
+        loader.loadScope('en', 'products'),
+        loader.loadScope('en', 'products'),
+        loader.loadScope('en', 'products'),
+      ]);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears the in-flight entry on fetch failure so the next call fires a fresh fetch', async () => {
+      // First attempt: fetch rejects.
+      mockFetch.mockRejectedValueOnce(new Error('network down'));
+      await loader.loadScope('en', 'products');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(cache.isScopeLoaded('en', 'products')).toBe(false);
+
+      // Retry succeeds: a new fetch must fire (not the settled rejected promise).
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ products: { title: 'Products' } }),
+      );
+      await loader.loadScope('en', 'products');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(cache.isScopeLoaded('en', 'products')).toBe(true);
+    });
   });
 
   // 4. Loads a scope bundle

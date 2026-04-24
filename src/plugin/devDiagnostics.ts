@@ -54,6 +54,8 @@ export interface DevDiagnosticsOptions {
   localesDir: string;
   extractionScope?: 'global' | 'scoped';
   sharedConfig: I18nSharedConfig;
+  /** Optional extraction cache — skips AST parses for unchanged files. */
+  cache?: import('../extractor/extraction-cache').ExtractionCache;
 }
 
 function hasAvailableKey(availableKeys: Map<string, string[]>, fullKey: string): boolean {
@@ -96,6 +98,7 @@ export function buildDevDiagnostics(
     defaultLocale: options.defaultLocale,
     extractionScope: options.extractionScope ?? 'global',
     hookSources: options.sharedConfig.extraction?.hookSources,
+    cache: options.cache,
   });
   const availableKeys = flattenLocaleKeys(localesDir, options.defaultLocale);
   const allAvailableKeys = [...availableKeys.entries()].flatMap(([namespace, keys]) =>

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -8,6 +8,8 @@ import {
   discoverNamespaces,
   walkRoute,
 } from '../../extractor/walker';
+import { createExtractionCache } from '../../extractor/extraction-cache';
+import * as extractModule from '../../extractor/extract';
 
 let tmpDir: string;
 
@@ -282,5 +284,149 @@ describe('walkRoute', () => {
 
     expect(result.keys.map((k) => k.key)).toContain('global.appName');
     expect(result.files).toContain(path.join(tmpDir, 'src/components/Header.tsx'));
+  });
+});
+
+describe('walkRoute with ExtractionCache', () => {
+  function makeCache() {
+    const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'i18n-walker-cache-'));
+    return {
+      cache: createExtractionCache({
+        dir: cacheDir,
+        pluginVersion: '0.4.1',
+        configHash: 'test',
+      }),
+      cacheDir,
+    };
+  }
+
+  it('populates the cache on a cold walk', () => {
+    const entry = writeFile(
+      'src/pages/Home.tsx',
+      `
+      import { useI18n } from 'vite-bundled-i18n/react';
+      export function Home() {
+        const { t } = useI18n('home');
+        return <h1>{t('home.title', 'Welcome')}</h1>;
+      }
+    `,
+    );
+    const { cache, cacheDir } = makeCache();
+
+    walkRoute(entry, {
+      rootDir: tmpDir,
+      extractionScope: 'global',
+      cache,
+    });
+
+    expect(cache.size()).toBe(1);
+    const entryCache = cache.get(entry);
+    expect(entryCache?.keys.map((k) => k.key)).toContain('home.title');
+    expect(entryCache?.scopes).toContain('home');
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  it('skips the AST parse on a warm walk with unchanged mtime/size', () => {
+    const entry = writeFile(
+      'src/pages/Home.tsx',
+      `
+      import { useI18n } from 'vite-bundled-i18n/react';
+      export function Home() {
+        const { t } = useI18n('home');
+        return <h1>{t('home.title', 'Welcome')}</h1>;
+      }
+    `,
+    );
+    const { cache, cacheDir } = makeCache();
+
+    // Cold walk populates the cache.
+    walkRoute(entry, {
+      rootDir: tmpDir,
+      extractionScope: 'global',
+      cache,
+    });
+
+    // Warm walk — spy on extractKeys and verify it's not called for the entry.
+    const extractSpy = vi.spyOn(extractModule, 'extractKeys');
+    const warm = walkRoute(entry, {
+      rootDir: tmpDir,
+      extractionScope: 'global',
+      cache,
+    });
+
+    expect(extractSpy).not.toHaveBeenCalled();
+    expect(warm.keys.map((k) => k.key)).toContain('home.title');
+    expect(warm.scopes).toContain('home');
+
+    extractSpy.mockRestore();
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  it('re-parses a file when its mtime changes', () => {
+    const entry = writeFile(
+      'src/pages/Home.tsx',
+      "export function Home() { return null; }",
+    );
+    const { cache, cacheDir } = makeCache();
+
+    walkRoute(entry, { rootDir: tmpDir, extractionScope: 'global', cache });
+
+    // Touch the file so mtime advances.
+    const later = Date.now() + 5_000;
+    fs.utimesSync(entry, later / 1000, later / 1000);
+    fs.writeFileSync(
+      entry,
+      `
+      import { useI18n } from 'vite-bundled-i18n/react';
+      export function Home() {
+        const { t } = useI18n('home');
+        return <h1>{t('home.title', 'Welcome')}</h1>;
+      }
+    `,
+    );
+
+    const extractSpy = vi.spyOn(extractModule, 'extractKeys');
+    const warm = walkRoute(entry, {
+      rootDir: tmpDir,
+      extractionScope: 'global',
+      cache,
+    });
+
+    expect(extractSpy).toHaveBeenCalledTimes(1);
+    expect(warm.keys.map((k) => k.key)).toContain('home.title');
+    extractSpy.mockRestore();
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  it('follows cached import paths without re-resolving', () => {
+    writeFile(
+      'src/components/Header.tsx',
+      `
+      import { useI18n } from 'vite-bundled-i18n/react';
+      export function Header() {
+        const { t } = useI18n();
+        return <header>{t('global.appName', 'Store')}</header>;
+      }
+    `,
+    );
+    const entry = writeFile(
+      'src/pages/Home.tsx',
+      `
+      import { Header } from '../components/Header';
+      export function Home() { return <Header />; }
+    `,
+    );
+    const { cache, cacheDir } = makeCache();
+
+    walkRoute(entry, { rootDir: tmpDir, extractionScope: 'global', cache });
+
+    const extractSpy = vi.spyOn(extractModule, 'extractKeys');
+    const warm = walkRoute(entry, { rootDir: tmpDir, extractionScope: 'global', cache });
+
+    expect(extractSpy).not.toHaveBeenCalled();
+    expect(warm.keys.map((k) => k.key)).toContain('global.appName');
+    expect(warm.files).toHaveLength(2);
+    extractSpy.mockRestore();
+    fs.rmSync(cacheDir, { recursive: true, force: true });
   });
 });

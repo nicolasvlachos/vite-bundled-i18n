@@ -199,4 +199,68 @@ describe('emitI18nBuildArtifacts', () => {
 
     expect(result.warnings).toEqual([]);
   });
+
+  it('writes scope-map.json next to the scope bundles with default page identifiers', () => {
+    emitI18nBuildArtifacts({
+      rootDir: tmpDir,
+      viteOutDir: path.join(tmpDir, 'dist'),
+      sharedConfig: {
+        localesDir: 'locales',
+        dictionaries: { global: { keys: ['shared'] } },
+      },
+      buildConfig: {
+        pages: ['src/pages/**/*.tsx'],
+        locales: ['en'],
+        defaultLocale: 'en',
+      },
+    });
+
+    const scopeMapPath = path.join(tmpDir, 'dist', '__i18n', 'scope-map.json');
+    expect(fs.existsSync(scopeMapPath)).toBe(true);
+
+    const map = JSON.parse(fs.readFileSync(scopeMapPath, 'utf-8'));
+    expect(map.version).toBe(1);
+    expect(map.defaultLocale).toBe('en');
+    // `src/pages/ProductsPage.tsx` → `ProductsPage` via defaultPageIdentifier
+    // (no `src/pages/` prefix stripping since there's no subdirectory).
+    expect(map.pages['ProductsPage']).toBeDefined();
+    expect(map.pages['ProductsPage'].scopes).toContain('products.index');
+    expect(map.pages['ProductsPage'].dictionaries).toEqual(['global']);
+  });
+
+  it('skips scope-map.json when emitReports is false', () => {
+    emitI18nBuildArtifacts({
+      rootDir: tmpDir,
+      viteOutDir: path.join(tmpDir, 'dist'),
+      sharedConfig: { localesDir: 'locales' },
+      buildConfig: {
+        pages: ['src/pages/**/*.tsx'],
+        locales: ['en'],
+        defaultLocale: 'en',
+        emitReports: false,
+      },
+    });
+
+    const scopeMapPath = path.join(tmpDir, 'dist', '__i18n', 'scope-map.json');
+    expect(fs.existsSync(scopeMapPath)).toBe(false);
+  });
+
+  it('honors a custom pageIdentifier', () => {
+    emitI18nBuildArtifacts({
+      rootDir: tmpDir,
+      viteOutDir: path.join(tmpDir, 'dist'),
+      sharedConfig: { localesDir: 'locales' },
+      buildConfig: {
+        pages: ['src/pages/**/*.tsx'],
+        locales: ['en'],
+        defaultLocale: 'en',
+        pageIdentifier: (abs) => `custom:${path.basename(abs, '.tsx')}`,
+      },
+    });
+
+    const map = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, 'dist', '__i18n', 'scope-map.json'), 'utf-8'),
+    );
+    expect(Object.keys(map.pages)).toEqual(['custom:ProductsPage']);
+  });
 });

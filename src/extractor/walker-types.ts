@@ -1,4 +1,5 @@
 import type { ExtractedKey } from './types';
+import type { ExtractionCache } from './extraction-cache';
 
 /**
  * Options for the import graph walker.
@@ -16,6 +17,12 @@ export interface WalkerOptions {
   extractionScope?: 'global' | 'scoped';
   /** Additional module specifiers that export `useI18n`. */
   hookSources?: string[];
+  /**
+   * Optional extraction cache. When provided, per-file AST parses are
+   * skipped for entries whose mtime + size match disk. See
+   * {@link ExtractionCache} and `createExtractionCache`.
+   */
+  cache?: ExtractionCache;
 }
 
 /**

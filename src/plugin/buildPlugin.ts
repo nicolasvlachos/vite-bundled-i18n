@@ -7,6 +7,14 @@ import { generateReports } from '../extractor/reports';
 import { generateBundles } from '../extractor/bundle-generator';
 import { compileAll } from '../extractor/compiler';
 import { walkAll } from '../extractor/walker';
+import {
+  createExtractionCache,
+  computeConfigHash,
+  type ExtractionCache,
+} from '../extractor/extraction-cache';
+import { resolveCacheConfig, type CacheOptionInput } from '../extractor/cache-config';
+import { PLUGIN_VERSION } from './version';
+import { buildScopeMap, type PageIdentifierFn } from '../extractor/scope-map';
 
 export interface I18nBuildPluginConfig {
   /** Glob patterns for route/page entry points. */
@@ -29,6 +37,22 @@ export interface I18nBuildPluginConfig {
   emitReports?: boolean;
   /** Disable writing compiled modules during `vite build`. */
   emitCompiled?: boolean;
+  /**
+   * Extraction cache control. Accepts `true` / `false` / options object.
+   * See {@link CacheOptionInput}. Env vars take precedence.
+   */
+  cache?: CacheOptionInput;
+  /**
+   * Maps an absolute page file path to a stable string identifier used as
+   * the key in the emitted `scope-map.json`. Consumers supply a function
+   * that produces whatever token their router exposes at runtime for the
+   * matched page.
+   *
+   * When omitted, {@link defaultPageIdentifier} is used — strips
+   * `src/pages/` and common `.tsx` / `.page.tsx` suffixes, normalizes to
+   * POSIX separators.
+   */
+  pageIdentifier?: PageIdentifierFn;
 }
 
 export interface EmitI18nBuildArtifactsOptions {
@@ -89,6 +113,32 @@ export function emitI18nBuildArtifacts(
     extractionScope,
   } = resolveBuildPaths(options);
 
+  const cacheSettings = resolveCacheConfig(buildConfig.cache, { rootDir });
+  let extractionCache: ExtractionCache | undefined;
+  if (cacheSettings.enabled) {
+    if (cacheSettings.clearBeforeStart) {
+      try {
+        fs.rmSync(cacheSettings.dir, { recursive: true, force: true });
+      } catch {
+        // Non-fatal.
+      }
+    }
+    extractionCache = createExtractionCache({
+      dir: cacheSettings.dir,
+      pluginVersion: PLUGIN_VERSION,
+      configHash: computeConfigHash({
+        pages: buildConfig.pages,
+        defaultLocale: buildConfig.defaultLocale,
+        extractionScope,
+        hookSources: sharedConfig.extraction?.hookSources,
+        keyFields: sharedConfig.extraction?.keyFields,
+        dictionaries: sharedConfig.dictionaries,
+        crossNamespacePacking: sharedConfig.bundling?.crossNamespacePacking,
+      }),
+      debug: cacheSettings.debug,
+    });
+  }
+
   const analysis = walkAll({
     pages: buildConfig.pages,
     rootDir,
@@ -96,7 +146,12 @@ export function emitI18nBuildArtifacts(
     defaultLocale: buildConfig.defaultLocale,
     extractionScope,
     hookSources: sharedConfig.extraction?.hookSources,
+    cache: extractionCache,
   });
+
+  if (extractionCache && cacheSettings.persist) {
+    extractionCache.persistToDisk();
+  }
 
   const bundles = generateBundles(analysis, {
     localesDir,
@@ -108,7 +163,17 @@ export function emitI18nBuildArtifacts(
 
   if (buildConfig.emitTypes !== false) {
     const scopeNames = [...new Set(analysis.routes.flatMap((route) => route.scopes))].sort();
-    writeTypes(localesDir, buildConfig.defaultLocale, typesOutPath, scopeNames);
+    const scopeMapForTypes = buildScopeMap(analysis, {
+      rootDir,
+      defaultLocale: buildConfig.defaultLocale,
+      dictionaries: sharedConfig.dictionaries,
+      pageIdentifier: buildConfig.pageIdentifier,
+    });
+    const pageScopeMap: Record<string, readonly string[]> = {};
+    for (const [id, entry] of Object.entries(scopeMapForTypes.pages)) {
+      pageScopeMap[id] = entry.scopes;
+    }
+    writeTypes(localesDir, buildConfig.defaultLocale, typesOutPath, scopeNames, pageScopeMap);
   }
 
   let compiledOutDir: string | undefined;
@@ -131,6 +196,22 @@ export function emitI18nBuildArtifacts(
       buildConfig.defaultLocale,
       generatedOutDir,
       sharedConfig.dictionaries,
+    );
+
+    // scope-map.json — framework-agnostic index of "page id → scopes + dicts".
+    // Consumers read this at runtime to parallelize scope loading with
+    // their router's async component-resolve hook. Lives next to the
+    // scope bundles so it's fetched from the same origin/base path.
+    const scopeMap = buildScopeMap(analysis, {
+      rootDir,
+      defaultLocale: buildConfig.defaultLocale,
+      dictionaries: sharedConfig.dictionaries,
+      pageIdentifier: buildConfig.pageIdentifier,
+    });
+    fs.mkdirSync(assetsOutDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(assetsOutDir, 'scope-map.json'),
+      JSON.stringify(scopeMap, null, 2),
     );
   }
 

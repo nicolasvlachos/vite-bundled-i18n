@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { globSync } from 'tinyglobby';
 import ts from 'typescript';
-import { extractKeys } from './extract';
+import * as extractModule from './extract';
 import type { ExtractedKey } from './types';
+import type { ExtractionCache } from './extraction-cache';
 import type {
   WalkerOptions,
   RouteAnalysis,
@@ -174,13 +175,39 @@ export function discoverNamespaces(
  */
 export function walkRoute(
   entryPoint: string,
-  options: { rootDir: string; extractionScope: 'global' | 'scoped'; hookSources?: string[] },
+  options: {
+    rootDir: string;
+    extractionScope: 'global' | 'scoped';
+    hookSources?: string[];
+    cache?: ExtractionCache;
+  },
 ): RouteAnalysis {
   const visited = new Set<string>();
   const allKeys: ExtractedKey[] = [];
   const allScopes: string[] = [];
   const allFiles: string[] = [];
   const seenKeys = new Set<string>();
+
+  function applyFileResult(
+    keys: readonly ExtractedKey[],
+    scopes: readonly string[],
+    imports: readonly string[],
+  ): void {
+    for (const key of keys) {
+      if (!seenKeys.has(key.key)) {
+        seenKeys.add(key.key);
+        allKeys.push(key);
+      }
+    }
+    for (const scope of scopes) {
+      if (!allScopes.includes(scope)) {
+        allScopes.push(scope);
+      }
+    }
+    for (const importedFile of imports) {
+      visit(importedFile);
+    }
+  }
 
   function visit(filePath: string): void {
     const resolved = path.resolve(filePath);
@@ -189,6 +216,22 @@ export function walkRoute(
     }
     visited.add(resolved);
 
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(resolved);
+    } catch {
+      return;
+    }
+
+    allFiles.push(resolved);
+
+    // Cache fast path: skip AST parse entirely when mtime + size match.
+    const cached = options.cache?.get(resolved);
+    if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
+      applyFileResult(cached.keys, cached.scopes, cached.imports);
+      return;
+    }
+
     let source: string;
     try {
       source = fs.readFileSync(resolved, 'utf-8');
@@ -196,33 +239,28 @@ export function walkRoute(
       return;
     }
 
-    allFiles.push(resolved);
-
-    const result = extractKeys(source, {
+    const result = extractModule.extractKeys(source, {
       scope: options.extractionScope,
       filePath: resolved,
       hookSources: options.hookSources,
     });
 
-    for (const key of result.keys) {
-      if (!seenKeys.has(key.key)) {
-        seenKeys.add(key.key);
-        allKeys.push(key);
-      }
-    }
-
-    for (const scope of result.scopes) {
-      if (!allScopes.includes(scope)) {
-        allScopes.push(scope);
-      }
-    }
-
+    // Resolve imports now so cached entries can be replayed without re-resolution.
+    const resolvedImports: string[] = [];
     for (const imp of result.imports) {
       const importPath = resolveImport(imp, resolved, options.rootDir);
-      if (importPath) {
-        visit(importPath);
-      }
+      if (importPath) resolvedImports.push(importPath);
     }
+
+    options.cache?.set(resolved, {
+      mtime: stat.mtimeMs,
+      size: stat.size,
+      imports: resolvedImports,
+      keys: result.keys,
+      scopes: result.scopes,
+    });
+
+    applyFileResult(result.keys, result.scopes, resolvedImports);
   }
 
   visit(entryPoint);
@@ -249,7 +287,12 @@ export function walkAll(options: WalkerOptions): ProjectAnalysis {
 
   // Walk each route
   const routes = entryFiles.map((entry) =>
-    walkRoute(entry, { rootDir, extractionScope, hookSources: options.hookSources }),
+    walkRoute(entry, {
+      rootDir,
+      extractionScope,
+      hookSources: options.hookSources,
+      cache: options.cache,
+    }),
   );
 
   // Discover namespaces

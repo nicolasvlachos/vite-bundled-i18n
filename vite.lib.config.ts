@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { defineConfig } from 'vite';
 
@@ -11,8 +12,15 @@ const entries = {
   'cli/index': path.resolve(__dirname, 'src/cli/index.ts'),
 };
 
+const pkg = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'),
+) as { version: string };
+
 export default defineConfig({
   publicDir: false,
+  define: {
+    __VITE_BUNDLED_I18N_VERSION__: JSON.stringify(pkg.version),
+  },
   esbuild: {
     jsx: 'automatic',
   },

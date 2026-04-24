@@ -1,7 +1,7 @@
 {
   "name": "vite-bundled-i18n",
   "private": false,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Route-aware i18n bundler for Vite. Translations are AST-extracted, tree-shaken per page, and shipped as scope-matched bundles — not loaded globally.",
   "type": "module",
   "types": "./dist/index.d.ts",

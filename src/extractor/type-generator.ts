@@ -117,7 +117,12 @@ function buildNestedInterface(keys: string[]): string {
  * When this file is present in the project, `t('shar...')` autocompletes to
  * `t('shared.ok')`. Without it, `t()` accepts any string.
  */
-export function generateTypes(localesDir: string, defaultLocale: string, scopes?: string[]): string {
+export function generateTypes(
+  localesDir: string,
+  defaultLocale: string,
+  scopes?: string[],
+  pageScopeMap?: Record<string, readonly string[]>,
+): string {
   const localeDir = path.join(localesDir, defaultLocale);
 
   let entries: string[];
@@ -196,6 +201,40 @@ export function generateTypes(localesDir: string, defaultLocale: string, scopes?
       .join('\n');
   }
 
+  // ---- I18nPageIdentifier + PAGE_SCOPE_MAP ----
+  // Framework-agnostic "page id → scopes" data. Consumers read this at
+  // runtime (typed) inside their router's async resolve hook and call
+  // i18n.loadScope(...) in parallel with component resolution.
+  let pageIdentifierDecl: string;
+  let pageScopeMapDecl: string;
+  const pageIds = pageScopeMap ? Object.keys(pageScopeMap).sort() : [];
+  if (pageIds.length === 0) {
+    pageIdentifierDecl = 'export type I18nPageIdentifier = string;';
+    pageScopeMapDecl =
+      'export const PAGE_SCOPE_MAP: Readonly<Record<string, readonly string[]>> = {};';
+  } else {
+    pageIdentifierDecl = `export type I18nPageIdentifier = ${pageIds
+      .map((id) => `'${escapeSingleQuotes(id)}'`)
+      .join(' | ')};`;
+
+    const entries = pageIds
+      .map((id) => {
+        const scopesForPage = pageScopeMap![id];
+        const values = scopesForPage
+          .map((s) => `'${escapeSingleQuotes(s)}'`)
+          .join(', ');
+        return `  '${escapeSingleQuotes(id)}': [${values}],`;
+      })
+      .join('\n');
+    pageScopeMapDecl = [
+      'export const PAGE_SCOPE_MAP: {',
+      '  readonly [K in I18nPageIdentifier]: readonly (keyof I18nScopeMap & string)[];',
+      '} = {',
+      entries,
+      '} as const;',
+    ].join('\n');
+  }
+
   // Direct exports — the generated file is imported by src/core/types.ts.
   // No module augmentation. This works for both npm consumers and local dev.
   return [
@@ -217,7 +256,15 @@ export function generateTypes(localesDir: string, defaultLocale: string, scopes?
     scopeMapEntries,
     `}`,
     '',
+    pageIdentifierDecl,
+    '',
+    pageScopeMapDecl,
+    '',
   ].join('\n');
+}
+
+function escapeSingleQuotes(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 /**
@@ -228,8 +275,9 @@ export function writeTypes(
   defaultLocale: string,
   outPath: string,
   scopes?: string[],
+  pageScopeMap?: Record<string, readonly string[]>,
 ): void {
-  const content = generateTypes(localesDir, defaultLocale, scopes);
+  const content = generateTypes(localesDir, defaultLocale, scopes, pageScopeMap);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, content, 'utf-8');
 }

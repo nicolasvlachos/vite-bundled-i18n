@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { walkAll } from '../extractor/walker';
 import { generateBundles } from '../extractor/bundle-generator';
@@ -7,6 +8,13 @@ import { compileAll } from '../extractor/compiler';
 import type { ProjectAnalysis } from '../extractor/walker-types';
 import type { DictionaryConfig } from '../core/types';
 import { flattenLocaleKeys } from '../extractor/reports';
+import {
+  createExtractionCache,
+  computeConfigHash,
+  type ExtractionCache,
+} from '../extractor/extraction-cache';
+import { resolveCacheConfig } from '../extractor/cache-config';
+import { PLUGIN_VERSION } from '../plugin/version';
 
 export interface CliConfig {
   /** Glob patterns for page entry points. */
@@ -34,6 +42,17 @@ export interface CliConfig {
    * See `I18nSharedConfig.bundling.crossNamespacePacking`.
    */
   crossNamespacePacking?: boolean;
+  /**
+   * Extraction cache control. `false` disables, an object configures the
+   * backing directory and persistence. Env vars (`VITE_I18N_NO_CACHE`,
+   * `VITE_I18N_CLEAR_CACHE`, `VITE_I18N_CACHE_DEBUG`) always take
+   * precedence. See `resolveCacheConfig`.
+   */
+  cache?: boolean | {
+    enabled?: boolean;
+    dir?: string;
+    persist?: boolean;
+  };
 }
 
 function resolveConfig(config: CliConfig) {
@@ -49,7 +68,42 @@ function resolveConfig(config: CliConfig) {
   return { rootDir, outDir, typesOutPath, localesDir, extractionScope } as const;
 }
 
-function runWalker(config: CliConfig): ProjectAnalysis {
+function buildCliCache(config: CliConfig, rootDir: string): ExtractionCache | undefined {
+  const cacheSettings = resolveCacheConfig(config.cache, { rootDir });
+  if (!cacheSettings.enabled) return undefined;
+
+  if (cacheSettings.clearBeforeStart) {
+    try {
+      fs.rmSync(cacheSettings.dir, { recursive: true, force: true });
+    } catch {
+      // Non-fatal — fall through to a fresh cache.
+    }
+  }
+
+  return createExtractionCache({
+    dir: cacheSettings.dir,
+    pluginVersion: PLUGIN_VERSION,
+    configHash: computeConfigHash({
+      pages: config.pages,
+      defaultLocale: config.defaultLocale,
+      extractionScope: config.extractionScope ?? 'global',
+      hookSources: config.hookSources,
+      dictionaries: config.dictionaries,
+      crossNamespacePacking: config.crossNamespacePacking,
+    }),
+    debug: cacheSettings.debug,
+  });
+}
+
+function persistCache(config: CliConfig, cache: ExtractionCache | undefined, rootDir: string): void {
+  if (!cache) return;
+  const cacheSettings = resolveCacheConfig(config.cache, { rootDir });
+  if (cacheSettings.persist) {
+    cache.persistToDisk();
+  }
+}
+
+function runWalker(config: CliConfig, cache?: ExtractionCache): ProjectAnalysis {
   const { rootDir, localesDir, extractionScope } = resolveConfig(config);
 
   return walkAll({
@@ -59,6 +113,7 @@ function runWalker(config: CliConfig): ProjectAnalysis {
     defaultLocale: config.defaultLocale,
     extractionScope,
     hookSources: config.hookSources,
+    cache,
   });
 }
 
@@ -116,8 +171,10 @@ function printTable(
  * Returns the ProjectAnalysis for programmatic use.
  */
 export function analyze(config: CliConfig): ProjectAnalysis {
-  const { localesDir } = resolveConfig(config);
-  const analysis = runWalker(config);
+  const { rootDir, localesDir } = resolveConfig(config);
+  const cache = buildCliCache(config, rootDir);
+  const analysis = runWalker(config, cache);
+  persistCache(config, cache, rootDir);
 
   const availableKeys = flattenLocaleKeys(localesDir, config.defaultLocale);
   const totalAvailable = Array.from(availableKeys.values()).reduce(
@@ -149,8 +206,10 @@ export function analyze(config: CliConfig): ProjectAnalysis {
  * Prints what was generated to stdout.
  */
 export function generate(config: CliConfig): void {
-  const { outDir, typesOutPath, localesDir } = resolveConfig(config);
-  const analysis = runWalker(config);
+  const { rootDir, outDir, typesOutPath, localesDir } = resolveConfig(config);
+  const cache = buildCliCache(config, rootDir);
+  const analysis = runWalker(config, cache);
+  persistCache(config, cache, rootDir);
 
   const bundles = generateBundles(analysis, {
     localesDir,
@@ -173,8 +232,10 @@ export function generate(config: CliConfig): void {
  * Prints summary to stdout.
  */
 export function report(config: CliConfig): void {
-  const { outDir, localesDir } = resolveConfig(config);
-  const analysis = runWalker(config);
+  const { rootDir, outDir, localesDir } = resolveConfig(config);
+  const cache = buildCliCache(config, rootDir);
+  const analysis = runWalker(config, cache);
+  persistCache(config, cache, rootDir);
 
   generateReports(analysis, localesDir, config.defaultLocale, outDir, config.dictionaries);
 
@@ -190,8 +251,10 @@ export function report(config: CliConfig): void {
  * Prints a summary to stdout.
  */
 export function compile(config: CliConfig): void {
-  const { outDir, localesDir } = resolveConfig(config);
-  const analysis = runWalker(config);
+  const { rootDir, outDir, localesDir } = resolveConfig(config);
+  const cache = buildCliCache(config, rootDir);
+  const analysis = runWalker(config, cache);
+  persistCache(config, cache, rootDir);
   const compiledOutDir = path.join(outDir, 'compiled');
 
   compileAll(analysis, {
@@ -218,8 +281,10 @@ export function compile(config: CliConfig): void {
  * Run analyze + generate + compile + report all at once.
  */
 export function build(config: CliConfig): void {
-  const { outDir, typesOutPath, localesDir } = resolveConfig(config);
-  const analysis = runWalker(config);
+  const { rootDir, outDir, typesOutPath, localesDir } = resolveConfig(config);
+  const cache = buildCliCache(config, rootDir);
+  const analysis = runWalker(config, cache);
+  persistCache(config, cache, rootDir);
 
   // Analyze: print table
   const availableKeys = flattenLocaleKeys(localesDir, config.defaultLocale);
