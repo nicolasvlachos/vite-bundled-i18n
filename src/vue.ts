@@ -8,6 +8,7 @@ import {
   type Ref,
 } from 'vue';
 import { createTranslations } from './core/getTranslations';
+import { resolveArgs } from './core/args';
 import type {
   I18nInstance,
   NestedTranslations,
@@ -140,9 +141,22 @@ export function useI18n(scope?: string): UseI18nReturn {
     unsubResources?.();
   });
 
-  const t: TFunction = ((key: string, ...args: unknown[]) => {
-    return instance.translate(locale.value, key, ...(args as [Record<string, unknown>?, string?]));
+  // Route through resolveArgs so `t('key', 'fallback')` and
+  // `t('key', { n: 1 })` disambiguate the same way React's translator does.
+  // Without this the second arg would always be passed positionally as
+  // `params`, turning a fallback string into invalid params.
+  const t: TFunction = ((...args: unknown[]) => {
+    const { key, params, fallback } = resolveArgs(args as Parameters<typeof resolveArgs>[0]);
+    return instance.translate(locale.value, key, params, fallback);
   }) as TFunction;
+  // `t.dynamic` shares runtime behavior with `t` — the only difference is
+  // the type contract (accepts any string instead of the TranslationKey
+  // union). Attach explicitly since we build `t` inline here rather than
+  // going through `createTranslations`.
+  t.dynamic = ((...args: unknown[]) => {
+    const { key, params, fallback } = resolveArgs(args as Parameters<typeof resolveArgs>[0]);
+    return instance.translate(locale.value, key as never, params, fallback);
+  }) as TFunction['dynamic'];
 
   const has: HasKeyFunction = (key: string) => {
     return instance.hasKey(locale.value, key);
@@ -178,6 +192,46 @@ export function useI18n(scope?: string): UseI18nReturn {
     ready,
     locale,
   };
+}
+
+/**
+ * Composable exposing the i18n readiness gate. Returns reactive `ready`
+ * and `pendingCount` refs that track outstanding `loadScope()` calls.
+ *
+ * ```vue
+ * <script setup>
+ * const { ready, pendingCount } = useGate();
+ * </script>
+ *
+ * <template>
+ *   <div v-if="!ready">Loading {{ pendingCount }} scope(s)…</div>
+ *   <RouterView v-else />
+ * </template>
+ * ```
+ */
+export function useGate(): { ready: Ref<boolean>; pendingCount: Ref<number> } {
+  const instance = inject(I18N_INJECTION_KEY);
+  if (!instance) {
+    throw new Error(
+      'vite-bundled-i18n: useGate() must be used in a component with the i18n plugin installed. ' +
+        'Call app.use(createI18nPlugin(instance)) before mounting.',
+    );
+  }
+
+  const gate = instance.gate;
+  const ready = ref(gate.ready);
+  const pendingCount = ref(gate.pendingCount);
+
+  let unsub: (() => void) | undefined;
+  onMounted(() => {
+    unsub = gate.subscribe(() => {
+      ready.value = gate.ready;
+      pendingCount.value = gate.pendingCount;
+    });
+  });
+  onUnmounted(() => { unsub?.(); });
+
+  return { ready, pendingCount };
 }
 
 // Core API re-exports

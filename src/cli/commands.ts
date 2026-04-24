@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { walkAll } from '../extractor/walker';
 import { generateBundles } from '../extractor/bundle-generator';
-import { writeTypes } from '../extractor/type-generator';
+import { writeTypes, writeRuntimeConst, runtimePathFromTypesPath } from '../extractor/type-generator';
 import { generateReports } from '../extractor/reports';
 import { compileAll } from '../extractor/compiler';
 import type { ProjectAnalysis } from '../extractor/walker-types';
@@ -15,6 +15,9 @@ import {
 } from '../extractor/extraction-cache';
 import { resolveCacheConfig } from '../extractor/cache-config';
 import { PLUGIN_VERSION } from '../plugin/version';
+import { buildScopeMap } from '../extractor/scope-map';
+import { applyDynamicKeys } from '../extractor/dynamic-keys';
+import { checkScopeRegistration } from '../extractor/scope-registration';
 
 export interface CliConfig {
   /** Glob patterns for page entry points. */
@@ -42,6 +45,17 @@ export interface CliConfig {
    * See `I18nSharedConfig.bundling.crossNamespacePacking`.
    */
   crossNamespacePacking?: boolean;
+  /**
+   * Runtime-computed keys to treat as always-extracted. Matches
+   * `I18nSharedConfig.bundling.dynamicKeys`. CLI-side JSON config only,
+   * since function-based identifiers aren't serializable.
+   */
+  dynamicKeys?: readonly string[];
+  /**
+   * Severity for the "page registers no scope" audit. Matches
+   * `I18nSharedConfig.bundling.strictScopeRegistration`.
+   */
+  strictScopeRegistration?: 'off' | 'warn' | 'error';
   /**
    * Extraction cache control. `false` disables, an object configures the
    * backing directory and persistence. Env vars (`VITE_I18N_NO_CACHE`,
@@ -106,7 +120,7 @@ function persistCache(config: CliConfig, cache: ExtractionCache | undefined, roo
 function runWalker(config: CliConfig, cache?: ExtractionCache): ProjectAnalysis {
   const { rootDir, localesDir, extractionScope } = resolveConfig(config);
 
-  return walkAll({
+  const analysis = walkAll({
     pages: config.pages,
     rootDir,
     localesDir,
@@ -115,10 +129,80 @@ function runWalker(config: CliConfig, cache?: ExtractionCache): ProjectAnalysis 
     hookSources: config.hookSources,
     cache,
   });
+
+  // Mirror the build plugin: apply declared dynamic keys and audit scope
+  // registration so CLI-generated artifacts match `vite build` exactly.
+  // Shared primitive, same semantics, no drift.
+  if (config.dynamicKeys && config.dynamicKeys.length > 0) {
+    const report = applyDynamicKeys(analysis, {
+      dynamicKeys: config.dynamicKeys,
+      dictionaries: config.dictionaries,
+      crossNamespacePacking: config.crossNamespacePacking,
+    });
+    for (const orphan of report.orphans) {
+      console.warn(
+        `[vite-bundled-i18n] dynamicKeys entry "${orphan}" matches no route ` +
+          `and no dictionary — it won't ship anywhere.`,
+      );
+    }
+  }
+
+  const strictMode = config.strictScopeRegistration ?? 'warn';
+  if (strictMode !== 'off') {
+    const report = checkScopeRegistration(analysis, { rootDir, mode: strictMode });
+    if (report.violations.length > 0) {
+      if (strictMode === 'error') {
+        throw new Error(
+          'vite-bundled-i18n: scope registration failures (strictScopeRegistration: \'error\'):\n\n' +
+            report.messages.join('\n\n'),
+        );
+      }
+      for (const message of report.messages) console.warn(message);
+    }
+  }
+
+  return analysis;
 }
 
 function collectScopeNames(analysis: ProjectAnalysis): string[] {
   return [...new Set(analysis.routes.flatMap((route) => route.scopes))].sort();
+}
+
+/**
+ * Emit both the typed `.ts` (for TSC/IDE) and runtime `.js` (for Vite
+ * resolve.alias) generated files. Called by every CLI command that
+ * previously only wrote the `.ts` file — keeps CLI output aligned with
+ * the Vite plugin's `emitGeneratedArtifacts` so there's no drift.
+ */
+function emitGeneratedPair(
+  analysis: ProjectAnalysis,
+  config: CliConfig,
+  localesDir: string,
+  rootDir: string,
+  typesOutPath: string,
+): void {
+  const scopeNames = collectScopeNames(analysis);
+  const scopeMap = buildScopeMap(analysis, {
+    rootDir,
+    defaultLocale: config.defaultLocale,
+    dictionaries: config.dictionaries,
+  });
+  const pageScopeMap: Record<string, readonly string[]> = {};
+  for (const [id, entry] of Object.entries(scopeMap.pages)) {
+    pageScopeMap[id] = entry.scopes;
+  }
+  const hasPageMap = Object.keys(pageScopeMap).length > 0;
+  writeTypes(
+    localesDir,
+    config.defaultLocale,
+    typesOutPath,
+    scopeNames,
+    hasPageMap ? pageScopeMap : undefined,
+  );
+  writeRuntimeConst(
+    runtimePathFromTypesPath(typesOutPath),
+    hasPageMap ? pageScopeMap : undefined,
+  );
 }
 
 /**
@@ -218,7 +302,7 @@ export function generate(config: CliConfig): void {
     crossNamespacePacking: config.crossNamespacePacking,
   });
 
-  writeTypes(localesDir, config.defaultLocale, typesOutPath, collectScopeNames(analysis));
+  emitGeneratedPair(analysis, config, localesDir, rootDir, typesOutPath);
 
   console.log(`Generated ${bundles.length} bundle(s):`);
   for (const b of bundles) {
@@ -313,7 +397,7 @@ export function build(config: CliConfig): void {
     crossNamespacePacking: config.crossNamespacePacking,
   });
 
-  writeTypes(localesDir, config.defaultLocale, typesOutPath, collectScopeNames(analysis));
+  emitGeneratedPair(analysis, config, localesDir, rootDir, typesOutPath);
 
   console.log(`\nGenerated ${bundles.length} bundle(s)`);
   console.log(`Types written to ${typesOutPath}`);

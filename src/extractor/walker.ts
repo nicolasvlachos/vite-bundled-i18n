@@ -187,6 +187,8 @@ export function walkRoute(
   const allScopes: string[] = [];
   const allFiles: string[] = [];
   const seenKeys = new Set<string>();
+  let entryScopes: string[] = [];
+  let entryVisited = false;
 
   function applyFileResult(
     keys: readonly ExtractedKey[],
@@ -211,6 +213,7 @@ export function walkRoute(
 
   function visit(filePath: string): void {
     const resolved = path.resolve(filePath);
+    const isEntry = !entryVisited;
     if (visited.has(resolved)) {
       return;
     }
@@ -228,6 +231,10 @@ export function walkRoute(
     // Cache fast path: skip AST parse entirely when mtime + size match.
     const cached = options.cache?.get(resolved);
     if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
+      if (isEntry) {
+        entryVisited = true;
+        entryScopes = [...cached.scopes];
+      }
       applyFileResult(cached.keys, cached.scopes, cached.imports);
       return;
     }
@@ -244,6 +251,10 @@ export function walkRoute(
       filePath: resolved,
       hookSources: options.hookSources,
     });
+    if (isEntry) {
+      entryVisited = true;
+      entryScopes = [...result.scopes];
+    }
 
     // Resolve imports now so cached entries can be replayed without re-resolution.
     const resolvedImports: string[] = [];
@@ -269,6 +280,7 @@ export function walkRoute(
     entryPoint: path.resolve(entryPoint),
     routeId: deriveRouteId(path.resolve(entryPoint), options.rootDir),
     scopes: allScopes,
+    entryScopes,
     keys: allKeys,
     files: allFiles,
   };

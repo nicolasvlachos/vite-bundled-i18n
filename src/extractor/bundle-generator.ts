@@ -43,9 +43,12 @@ export interface GeneratedBundle {
 }
 
 /**
- * Flatten a nested object into dot-separated key paths.
+ * Flatten a nested object into dot-separated key paths. Null/undefined at
+ * the entry or any subtree short-circuits to an empty list — a missing
+ * namespace contributes no keys, never throws.
  */
-export function flattenKeys(data: object, prefix?: string): string[] {
+export function flattenKeys(data: object | null | undefined, prefix?: string): string[] {
+  if (data == null) return [];
   const keys: string[] = [];
   for (const [k, v] of Object.entries(data)) {
     const fullKey = prefix ? `${prefix}.${k}` : k;

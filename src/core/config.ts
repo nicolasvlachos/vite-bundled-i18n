@@ -57,6 +57,40 @@ export interface I18nSharedConfig {
      * @default false
      */
     crossNamespacePacking?: boolean;
+    /**
+     * After extraction, verify that every file matching the `pages` glob
+     * declares at least one `useI18n('<literal>')` scope. Files without
+     * a registered scope don't contribute to any scope bundle — their
+     * translation keys only work if covered by a dictionary, which is
+     * almost always a mistake.
+     *
+     * - `'off'` — no check
+     * - `'warn'` (default) — log a warning per offender via Vite's logger
+     * - `'error'` — throw during the build; fails CI
+     */
+    strictScopeRegistration?: 'off' | 'warn' | 'error';
+    /**
+     * Fully qualified keys the extractor can't see from static `t()` calls —
+     * e.g. keys built from variables (`t.dynamic(\`status.\${state}\`)`) or
+     * keys resolved at runtime via a map.
+     *
+     * Each listed key is added to every route whose scope's primary
+     * namespace (or packed cross-ns extras namespace) matches the key's
+     * namespace. Dictionary-owned keys are skipped — dictionaries already
+     * guarantee global availability.
+     *
+     * Keys whose namespace matches no route and isn't dictionary-owned
+     * emit a build warning. A "dangling" dynamic key silently bloats
+     * nothing; flagging it forces the user to correct the config.
+     *
+     * @example
+     * ```ts
+     * bundling: {
+     *   dynamicKeys: ['status.active', 'status.pending', 'status.failed'],
+     * }
+     * ```
+     */
+    dynamicKeys?: readonly string[];
   };
 }
 

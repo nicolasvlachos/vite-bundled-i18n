@@ -245,6 +245,49 @@ describe('emitI18nBuildArtifacts', () => {
     expect(fs.existsSync(scopeMapPath)).toBe(false);
   });
 
+  it('emitI18nBuildArtifacts wrapper applies bundling.dynamicKeys (parity with plugin)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/status.json'),
+      JSON.stringify({ active: 'Active', pending: 'Pending', failed: 'Failed' }),
+    );
+    // A page under the status namespace — the dynamic keys flow in via
+    // applyDynamicKeys triggered from runProjectAnalysis.
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/StatusPage.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function StatusPage() {',
+        "  const { t } = useI18n('status.dashboard');",
+        "  return <div>{t.dynamic('status.' + 'active')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+
+    emitI18nBuildArtifacts({
+      rootDir: tmpDir,
+      viteOutDir: path.join(tmpDir, 'dist'),
+      sharedConfig: {
+        localesDir: 'locales',
+        bundling: { dynamicKeys: ['status.active', 'status.pending'] },
+      },
+      buildConfig: {
+        pages: ['src/pages/**/*.tsx'],
+        locales: ['en'],
+        defaultLocale: 'en',
+      },
+    });
+
+    // Scope bundle for status.dashboard must include the dynamic keys.
+    const bundlePath = path.join(tmpDir, 'dist', '__i18n', 'en', 'status.dashboard.json');
+    expect(fs.existsSync(bundlePath)).toBe(true);
+    const bundle = JSON.parse(fs.readFileSync(bundlePath, 'utf-8'));
+    expect(bundle.status).toBeDefined();
+    expect(bundle.status.active).toBe('Active');
+    expect(bundle.status.pending).toBe('Pending');
+    // failed was NOT in dynamicKeys, NOT statically referenced — still tree-shaken
+    expect(bundle.status.failed).toBeUndefined();
+  });
+
   it('honors a custom pageIdentifier', () => {
     emitI18nBuildArtifacts({
       rootDir: tmpDir,

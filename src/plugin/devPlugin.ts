@@ -3,7 +3,11 @@ import path from 'node:path';
 import type { Plugin, ResolvedConfig } from 'vite';
 import { flattenKeys, pruneNamespace } from '../extractor/bundle-generator';
 import { keyMatchesPattern, normalizeDictionaries } from '../extractor/dictionary-ownership';
-import { generateTypes } from '../extractor/type-generator';
+import {
+  generateTypes,
+  writeRuntimeConst,
+  runtimePathFromTypesPath,
+} from '../extractor/type-generator';
 import type { I18nSharedConfig } from '../core/config';
 import { I18N_DEV_UPDATE_EVENT } from '../core/runtime-env';
 import { buildDevDiagnostics } from './devDiagnostics';
@@ -19,6 +23,7 @@ import { resolveCacheConfig, type CacheOptionInput } from '../extractor/cache-co
 import { extractKeys } from '../extractor/extract';
 import { PLUGIN_VERSION } from './version';
 import { buildScopeMap, type PageIdentifierFn } from '../extractor/scope-map';
+import { applyDynamicKeys } from '../extractor/dynamic-keys';
 
 /**
  * Configuration for the i18n dev plugin.
@@ -302,6 +307,16 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
         hookSources: config.extraction?.hookSources,
         cache: extractionCache,
       });
+      // Apply declared dynamic keys before building the scope map so dev
+      // matches prod exactly — dev types, `/__i18n/scope-map.json`, and
+      // scope-bundle responses all reflect the injected keys.
+      if (config.bundling?.dynamicKeys && config.bundling.dynamicKeys.length > 0) {
+        applyDynamicKeys(analysis, {
+          dynamicKeys: config.bundling.dynamicKeys,
+          dictionaries: config.dictionaries,
+          crossNamespacePacking: config.bundling.crossNamespacePacking,
+        });
+      }
       cachedScopeMap = buildScopeMap(analysis, {
         rootDir: projectRoot,
         defaultLocale,
@@ -359,6 +374,16 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
           return { byScope: cachedExtrasByScope, byNamespace: cachedExtrasByNamespace };
         }
 
+        // Apply declared dynamic keys before computing extras so dev
+        // extras indexes mirror prod.
+        if (config.bundling.dynamicKeys && config.bundling.dynamicKeys.length > 0) {
+          applyDynamicKeys(analysis, {
+            dynamicKeys: config.bundling.dynamicKeys,
+            dictionaries: config.dictionaries,
+            crossNamespacePacking: true,
+          });
+        }
+
         const availableKeys = new Set<string>();
         for (const route of analysis.routes) {
           for (const key of route.keys) {
@@ -413,14 +438,22 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
         pageScopeMap[id] = entry.scopes;
         for (const s of entry.scopes) scopes.add(s);
       }
+      const typesOutPath = resolveTypesOutPath();
+      const hasPageMap = Object.keys(pageScopeMap).length > 0;
       writeTextFileIfChanged(
-        resolveTypesOutPath(),
+        typesOutPath,
         generateTypes(
           resolveLocalesPath(),
           defaultLocale,
           scopes.size > 0 ? [...scopes].sort() : undefined,
-          Object.keys(pageScopeMap).length > 0 ? pageScopeMap : undefined,
+          hasPageMap ? pageScopeMap : undefined,
         ),
+      );
+      // Runtime `.js` companion for the `vite-bundled-i18n/generated`
+      // resolve.alias — Vite can't resolve tsconfig-path aliases on its own.
+      writeRuntimeConst(
+        runtimePathFromTypesPath(typesOutPath),
+        hasPageMap ? pageScopeMap : undefined,
       );
     } catch {
       // Silently skip if locales dir doesn't exist yet
@@ -641,11 +674,29 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
   return {
     name: 'vite-bundled-i18n-dev',
     apply: 'serve',
-    config() {
+    config(config) {
+      // Mirror the build plugin: alias `vite-bundled-i18n/generated` to the
+      // project-local runtime file. Ensures a placeholder exists so Vite's
+      // resolver doesn't error on the first navigation before buildStart /
+      // configureServer has written the real content.
+      const projectRootCfg = config.root ?? process.cwd();
+      const generatedDir = path.resolve(projectRootCfg, '.i18n');
+      const runtimePath = options?.typesOutPath
+        ? runtimePathFromTypesPath(path.resolve(projectRootCfg, options.typesOutPath))
+        : path.join(generatedDir, 'i18n-generated.js');
+      if (!fs.existsSync(runtimePath)) {
+        try { writeRuntimeConst(runtimePath, undefined); } catch { /* non-fatal */ }
+      }
+
       return {
         define: {
           __VITE_I18N_DEV__: JSON.stringify(true),
           __VITE_I18N_DEVBAR__: JSON.stringify(options?.devBar ?? true),
+        },
+        resolve: {
+          alias: {
+            'vite-bundled-i18n/generated': runtimePath,
+          },
         },
       };
     },

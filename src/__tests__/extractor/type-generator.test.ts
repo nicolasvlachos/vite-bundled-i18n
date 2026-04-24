@@ -7,6 +7,8 @@ import {
   flattenToKeyPaths,
   flattenToLeafValues,
   generateTypes,
+  generateRuntimeConst,
+  runtimePathFromTypesPath,
 } from '../../extractor/type-generator';
 
 let tmpDir: string;
@@ -206,6 +208,26 @@ describe('scope type generation', () => {
     expect(output).toContain(
       'export const PAGE_SCOPE_MAP: Readonly<Record<string, readonly string[]>> = {};',
     );
+  });
+
+  it('generateRuntimeConst produces a .js with a frozen PAGE_SCOPE_MAP', () => {
+    const js = generateRuntimeConst({
+      'products/show': ['products.show'],
+      'cart/index': ['cart.index', 'cart.summary'],
+    });
+    expect(js).toContain('export const PAGE_SCOPE_MAP = Object.freeze({');
+    expect(js).toContain(`'cart/index': Object.freeze(['cart.index', 'cart.summary']),`);
+    expect(js).toContain(`'products/show': Object.freeze(['products.show']),`);
+  });
+
+  it('generateRuntimeConst produces an empty frozen object when no page map is given', () => {
+    const js = generateRuntimeConst();
+    expect(js).toContain('export const PAGE_SCOPE_MAP = Object.freeze({});');
+  });
+
+  it('runtimePathFromTypesPath swaps .ts for .js siblings', () => {
+    expect(runtimePathFromTypesPath('/a/b/i18n-generated.ts')).toBe('/a/b/i18n-generated.js');
+    expect(runtimePathFromTypesPath('/a/b/i18n-generated.d.ts')).toBe('/a/b/i18n-generated.js');
   });
 
   it('escapes single quotes in page identifier keys and scope values', () => {

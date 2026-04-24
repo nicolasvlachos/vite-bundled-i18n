@@ -19,6 +19,7 @@ import { createKeyTracker } from './services/key-tracker';
 import { createCacheManager } from './services/cache-manager';
 import { createBundleLoader, type CompiledLoader } from './services/bundle-loader';
 import { createLocaleManager } from './services/locale-manager';
+import { createReadinessGate } from './services/readiness-gate';
 
 // ---------------------------------------------------------------------------
 // Exported helpers
@@ -196,6 +197,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
   // -- Create services --------------------------------------------------------
 
   const keyTracker = createKeyTracker(isDevRuntime());
+  const gate = createReadinessGate();
 
   const cache = createCacheManager(
     { dictionaries: config.dictionaries, cache: config.cache },
@@ -605,7 +607,17 @@ export function createI18n(config: I18nConfig): I18nInstance {
     loadNamespaces: (locale, namespaces) => loader.loadNamespaces(locale, namespaces),
     loadDictionary: (locale, name) => loader.loadDictionary(locale, name),
     loadAllDictionaries: (locale) => loader.loadAllDictionaries(locale),
-    loadScope: (locale, scope) => loader.loadScope(locale, scope),
+    loadScope: (locale, scope, options) => {
+      // By default every scope load registers with the gate so UI adapters
+      // can present a unified "i18n is loading" signal without each
+      // consumer maintaining its own counter. Callers that have their own
+      // orchestration can opt out per-call with { trackReadiness: false }.
+      if (options?.trackReadiness === false) {
+        return loader.loadScope(locale, scope);
+      }
+      const release = gate.register();
+      return loader.loadScope(locale, scope).finally(release);
+    },
     addResources,
     markScopeLoaded: (locale, scope) => cache.markScopeLoaded(locale, scope),
     markDictionaryLoaded: (locale, name) => cache.markDictionaryLoaded(locale, name),
@@ -639,6 +651,7 @@ export function createI18n(config: I18nConfig): I18nInstance {
     setActiveScope(scope: string | undefined) {
       activeScope = scope;
     },
+    gate,
   };
 
   return instance;

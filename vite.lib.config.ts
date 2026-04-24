@@ -10,6 +10,10 @@ const entries = {
   server: path.resolve(__dirname, 'src/server-entry.ts'),
   plugin: path.resolve(__dirname, 'src/plugin.ts'),
   'cli/index': path.resolve(__dirname, 'src/cli/index.ts'),
+  testing: path.resolve(__dirname, 'src/testing.ts'),
+  // Shim for the `vite-bundled-i18n/generated` runtime export. Empty
+  // placeholder; the plugin overrides this via a resolve.alias at build time.
+  'core/i18n-generated-shim': path.resolve(__dirname, 'src/core/i18n-generated-shim.ts'),
 };
 
 const pkg = JSON.parse(

@@ -42,6 +42,10 @@ function createNamespacedTranslations(
     const { key, params, fallback } = resolveArgs(args as ResolveArgsInput);
     return instance.translate(locale, buildFullKey(key), params, fallback);
   }) as ScopedTFunction;
+  get.dynamic = ((...args: unknown[]): string => {
+    const { key, params, fallback } = resolveArgs(args as ResolveArgsInput);
+    return instance.translate(locale, buildFullKey(key), params, fallback);
+  }) as ScopedTFunction['dynamic'];
 
   const has: HasKeyFunction = (key) => {
     return hasResolvedKey(instance, locale, buildFullKey(key));
@@ -92,6 +96,13 @@ export function createTranslations(
     const { key, params, fallback } = resolveArgs(args as ResolveArgsInput);
     return instance.translate(locale, key as TranslationKey, params, fallback);
   }) as TFunction;
+  // `t.dynamic` has identical runtime behavior — the only difference is the
+  // type contract, which accepts any string. Attach the same callable
+  // so consumers don't pay an extra closure for the escape hatch.
+  get.dynamic = ((...args: unknown[]): string => {
+    const { key, params, fallback } = resolveArgs(args as ResolveArgsInput);
+    return instance.translate(locale, key as TranslationKey, params, fallback);
+  }) as TFunction['dynamic'];
 
   const has: HasKeyFunction = (key) => {
     return hasResolvedKey(instance, locale, key);

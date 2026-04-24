@@ -703,6 +703,50 @@ describe('createI18n', () => {
     warnSpy.mockRestore();
   });
 
+  it('loadScope auto-registers with the readiness gate until the fetch settles', async () => {
+    let resolveFetch!: (r: Response) => void;
+    globalThis.fetch = vi.fn().mockReturnValue(
+      new Promise<Response>((resolve) => { resolveFetch = resolve; }),
+    );
+    const instance = createI18n(baseConfig);
+    expect(instance.gate.ready).toBe(true);
+
+    const p = instance.loadScope('en', 'products.index');
+    expect(instance.gate.ready).toBe(false);
+    expect(instance.gate.pendingCount).toBe(1);
+
+    resolveFetch({
+      ok: true,
+      json: () => Promise.resolve({ products: { index: { heading: 'All' } } }),
+    } as Response);
+
+    await p;
+    expect(instance.gate.ready).toBe(true);
+    expect(instance.gate.pendingCount).toBe(0);
+  });
+
+  it('loadScope releases the gate even when the fetch fails', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('boom'));
+    const instance = createI18n(baseConfig);
+    await instance.loadScope('en', 'products.index');
+    expect(instance.gate.ready).toBe(true);
+  });
+
+  it('loadScope with { trackReadiness: false } skips gate registration', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ products: { index: { heading: 'All' } } }),
+    } as Response);
+    const instance = createI18n(baseConfig);
+
+    const listener = vi.fn();
+    instance.gate.subscribe(listener);
+    await instance.loadScope('en', 'products.index', { trackReadiness: false });
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(instance.gate.ready).toBe(true);
+  });
+
   it('annotates recorded entries with the active scope set via setActiveScope', () => {
     const instance = createI18n({
       locale: 'en',

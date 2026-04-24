@@ -165,6 +165,31 @@ function ProductsPage() {
 
 **`useI18n(scope)`** triggers a single HTTP request to load the scope bundle. Dictionaries are always available. Previously visited scopes are instant (cached). Missing-key warnings are automatically suppressed while a scope is loading — no need to guard every `useMemo`.
 
+**`useI18n()` without a scope** returns a translator bound to the current cache — whatever's already loaded (dictionaries + any scope the parent or sibling components registered). Use this in child components below a page that has already declared its scope, or in layout components that only read dictionary keys.
+
+```tsx
+// Pattern A — page registers its own scope
+function ProductsPage() {
+  const { t } = useI18n('products.show')  // loads products.show bundle
+  return <section><Header /><Details /></section>
+}
+
+// Pattern B — page composes children; each child declares its own scope
+function AdminPage() {
+  return <><Sidebar /><MainContent /></>  // no scope at the page level
+}
+function Sidebar() {
+  const { t } = useI18n('sidebar.admin')  // child registers
+  return <nav>{t('sidebar.admin.heading')}</nav>
+}
+function MainContent() {
+  const { t } = useI18n()                 // reads whatever's loaded
+  return <main>{t('sidebar.admin.welcome')}</main>
+}
+```
+
+Both patterns feed the same `PAGE_SCOPE_MAP` — the walker aggregates scopes across the full route tree, so routers using the [integration pattern](#router-integration) preload correctly either way.
+
 **`I18nBoundary`** handles scope loading without early returns:
 
 ```tsx
@@ -428,6 +453,7 @@ cache: {
 | `vite-bundled-i18n/server` | `initServerI18n` (SSR) |
 | `vite-bundled-i18n/plugin` | Vite plugin (`i18nPlugin`) |
 | `vite-bundled-i18n/generated` | Generated types + `PAGE_SCOPE_MAP` / `I18nPageIdentifier` |
+| `vite-bundled-i18n/testing` | `createTestI18n`, `I18nTestProvider`, `createI18nTestPlugin` |
 
 ## Documentation
 
@@ -437,7 +463,7 @@ cache: {
 
 ## Releases
 
-Current release: **v0.5.0** — persistent extraction cache, framework-neutral page scope map, typed `PAGE_SCOPE_MAP`, `loadScope` concurrency guarantees.
+Current release: **v0.6.0** — framework-agnostic readiness gate (`i18n.gate`, `<GateBoundary>`, `useGate()`), runtime `createScopeMapClient()`, `t.dynamic()` escape hatch, `bundling.dynamicKeys` + `strictScopeRegistration`, `vite-bundled-i18n/testing` subpackage. Breaking: `loadScope` now auto-registers with the gate by default — opt out via `{ trackReadiness: false }`.
 
 Version history lives in the [git log](https://github.com/nicolasvlachos/vite-bundled-i18n/commits/main) — each release is a `feat: v{version}` commit with a summary of the changes.
 

@@ -280,13 +280,22 @@ function dictionaryTouchesNamespace(
   });
 }
 
-/** Recursively count leaf (string) values in a nested translations object. */
-function countLeaves(data: NestedTranslations): number {
+/**
+ * Recursively count leaf (string) values in a nested translations object.
+ *
+ * Defensive: `data` may be `null`/`undefined` when a namespace entry is
+ * registered but its payload is still being fetched, or when user JSON has
+ * a nullable leaf. Every level short-circuits on null to keep the walk
+ * total-function.
+ */
+function countLeaves(data: NestedTranslations | null | undefined): number {
+  if (data == null) return 0;
   let count = 0;
   for (const value of Object.values(data)) {
+    if (value === null || value === undefined) continue;
     if (typeof value === 'string') {
       count += 1;
-    } else {
+    } else if (typeof value === 'object' && !Array.isArray(value)) {
       count += countLeaves(value);
     }
   }

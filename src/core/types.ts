@@ -1,4 +1,5 @@
 import type { CompiledManifestModule } from './compiled-runtime';
+import type { ReadinessGate } from './services/readiness-gate';
 import type {
   I18nNestedKeys,
   I18nParamsMap,
@@ -123,6 +124,29 @@ export type TFunction = {
   (key: TranslationKey, fallback: string): string;
   (key: TranslationKey, params: Record<string, unknown>): string;
   (key: TranslationKey, params: Record<string, unknown>, fallback: string): string;
+  /**
+   * Escape hatch for runtime-computed keys. Accepts any string —
+   * bypasses the typed `TranslationKey` union. Use when the key is
+   * assembled from variables (`t.dynamic(\`status.\${state}\`)`) and
+   * you've already paired it with an entry in
+   * `bundling.dynamicKeys` (or a dictionary) so the referenced
+   * value actually ships to the client.
+   *
+   * Identical runtime behavior to `t(...)` — only the type contract
+   * differs.
+   */
+  dynamic: DynamicTFunction;
+};
+
+/**
+ * Loosely-typed sibling of {@link TFunction} for keys that can't be
+ * statically expressed. Accepts any string.
+ */
+export type DynamicTFunction = {
+  (key: string): string;
+  (key: string, fallback: string): string;
+  (key: string, params: Record<string, unknown>): string;
+  (key: string, params: Record<string, unknown>, fallback: string): string;
 };
 
 /**
@@ -135,6 +159,8 @@ export type ScopedTFunction = {
   (key: string, fallback: string): string;
   (key: string, params: Record<string, unknown>): string;
   (key: string, params: Record<string, unknown>, fallback: string): string;
+  /** Same loose-typed escape hatch as {@link TFunction.dynamic}. */
+  dynamic: DynamicTFunction;
 };
 
 /**
@@ -410,9 +436,19 @@ export interface I18nInstance {
 
   /**
    * Loads a page/scope bundle for a locale.
-   * One HTTP request: `/__i18n/{locale}/{scope}.json`
+   * One HTTP request: `/__i18n/{locale}/{scope}.json`.
+   *
+   * **Readiness tracking:** By default the call auto-registers with
+   * {@link I18nInstance.gate}, which UI adapters (`<GateBoundary>`,
+   * `useGate()`) read from. Pass `{ trackReadiness: false }` to skip
+   * registration — use this only when you have an explicit orchestration
+   * layer that already gates rendering independently.
    */
-  loadScope: (locale: string, scope: string) => Promise<void>;
+  loadScope: (
+    locale: string,
+    scope: string,
+    options?: { trackReadiness?: boolean },
+  ) => Promise<void>;
 
   /**
    * Adds resources directly to the store. Useful for testing and SSR.
@@ -554,6 +590,14 @@ export interface I18nInstance {
    * called without a scope).
    */
   setActiveScope: (scope: string | undefined) => void;
+
+  /**
+   * Framework-agnostic readiness primitive. Every `loadScope` call
+   * auto-registers with this gate (opt out per-call via
+   * `{ trackReadiness: false }`); UI adapters subscribe for the "am I
+   * still loading?" state. See {@link ReadinessGate}.
+   */
+  gate: ReadinessGate;
 }
 
 /**

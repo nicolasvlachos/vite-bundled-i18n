@@ -20,11 +20,14 @@ const RESOLUTION_LABELS: Record<KeyUsageEntry['resolvedFrom'], string> = {
   'key-as-value': 'Missing',
 };
 
-/** Count leaf string values in a nested translations object. */
-function countLeafKeys(data: NestedTranslations): number {
+/** Count leaf string values in a nested translations object (null-safe). */
+function countLeafKeys(data: NestedTranslations | null | undefined): number {
+  if (data == null) return 0;
   let count = 0;
   for (const v of Object.values(data)) {
-    count += typeof v === 'string' ? 1 : countLeafKeys(v);
+    if (v === null || v === undefined) continue;
+    if (typeof v === 'string') count += 1;
+    else if (typeof v === 'object' && !Array.isArray(v)) count += countLeafKeys(v);
   }
   return count;
 }

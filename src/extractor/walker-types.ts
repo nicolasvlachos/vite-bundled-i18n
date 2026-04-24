@@ -35,6 +35,12 @@ export interface RouteAnalysis {
   routeId: string;
   /** All scopes found across the component tree for this route. */
   scopes: string[];
+  /**
+   * Scopes declared **in the entry file itself** (not transitively via imports).
+   * Used by {@link bundling.strictScopeRegistration} to detect pages that
+   * pull in translations via components but never register their own scope.
+   */
+  entryScopes: string[];
   /** All unique translation keys used by this route (deduplicated by key string). */
   keys: ExtractedKey[];
   /** All files in this route's component tree (absolute paths). */

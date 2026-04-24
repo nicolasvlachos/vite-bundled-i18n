@@ -287,6 +287,92 @@ describe('walkRoute', () => {
   });
 });
 
+describe('walkRoute — scope registration patterns', () => {
+  it('aggregates scopes declared by child components (pattern B)', () => {
+    // Entry file composes children; children declare scopes.
+    writeFile(
+      'src/components/Sidebar.tsx',
+      `
+      import { useI18n } from 'vite-bundled-i18n/react';
+      export function Sidebar() {
+        const { t } = useI18n('sidebar.admin');
+        return <nav>{t('sidebar.admin.heading', 'Admin')}</nav>;
+      }
+    `,
+    );
+    writeFile(
+      'src/components/MainContent.tsx',
+      `
+      import { useI18n } from 'vite-bundled-i18n/react';
+      export function MainContent() {
+        // No scope argument — just reads from the already-loaded cache.
+        const { t } = useI18n();
+        return <main>{t('sidebar.admin.welcome', 'Welcome')}</main>;
+      }
+    `,
+    );
+    const entry = writeFile(
+      'src/pages/Admin.tsx',
+      `
+      import { Sidebar } from '../components/Sidebar';
+      import { MainContent } from '../components/MainContent';
+      export function Admin() {
+        // Entry itself composes — never calls useI18n with a scope literal.
+        return <><Sidebar /><MainContent /></>;
+      }
+    `,
+    );
+
+    const result = walkRoute(entry, {
+      rootDir: tmpDir,
+      extractionScope: 'global',
+    });
+
+    // route.scopes aggregates across the graph — the child's scope counts.
+    expect(result.scopes).toContain('sidebar.admin');
+    // route.entryScopes stays empty — the entry file never declared a scope.
+    expect(result.entryScopes).toEqual([]);
+    // Both patterns coexist: a child using useI18n() (no args) still
+    // contributes extracted keys to the route.
+    expect(result.keys.map((k) => k.key).sort()).toEqual([
+      'sidebar.admin.heading',
+      'sidebar.admin.welcome',
+    ]);
+  });
+
+  it('captures entryScopes only when the entry file itself declares a scope (pattern A)', () => {
+    writeFile(
+      'src/components/Details.tsx',
+      `
+      import { useI18n } from 'vite-bundled-i18n/react';
+      export function Details() {
+        const { t } = useI18n();
+        return <div>{t('products.show.price', '$0')}</div>;
+      }
+    `,
+    );
+    const entry = writeFile(
+      'src/pages/ProductsShow.tsx',
+      `
+      import { useI18n } from 'vite-bundled-i18n/react';
+      import { Details } from '../components/Details';
+      export function ProductsShow() {
+        const { t } = useI18n('products.show');
+        return <section>{t('products.show.title', 'Product')}<Details /></section>;
+      }
+    `,
+    );
+
+    const result = walkRoute(entry, {
+      rootDir: tmpDir,
+      extractionScope: 'global',
+    });
+
+    expect(result.scopes).toContain('products.show');
+    expect(result.entryScopes).toEqual(['products.show']);
+  });
+});
+
 describe('walkRoute with ExtractionCache', () => {
   function makeCache() {
     const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'i18n-walker-cache-'));

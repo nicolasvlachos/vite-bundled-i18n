@@ -304,4 +304,29 @@ describe('useI18n', () => {
     expect(existsFn!('shared.ok')).toBe(true);
     expect(existsFn!('shared.missing')).toBe(false);
   });
+
+  it('exposes t.dynamic so runtime-computed keys resolve in Vue components', () => {
+    const instance = createI18n({
+      locale: 'en',
+      defaultLocale: 'en',
+      supportedLocales: ['en'],
+      localesDir: '/locales',
+    });
+    instance.addResources('en', 'status', {
+      active: 'Active',
+      pending: 'Pending',
+    });
+
+    let dynamicFn: ((key: string) => string) | undefined;
+    mountWithPlugin(instance, () => {
+      const { t } = useI18n();
+      dynamicFn = t.dynamic;
+      return {};
+    });
+
+    expect(typeof dynamicFn).toBe('function');
+    const state = 'active';
+    expect(dynamicFn!(`status.${state}`)).toBe('Active');
+    expect(dynamicFn!('status.missing', 'Unknown')).toBe('Unknown');
+  });
 });

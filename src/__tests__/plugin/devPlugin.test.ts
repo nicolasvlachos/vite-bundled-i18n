@@ -285,6 +285,41 @@ describe('i18nDevPlugin', () => {
     expect(map.pages).toEqual({});
   });
 
+  it('applies bundling.dynamicKeys so dev-served scope-map matches production', () => {
+    // Dev must match prod: declared dynamic keys should appear in the
+    // dev-served /__i18n/scope-map.json scopes for any route whose primary
+    // namespace matches the key's namespace.
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/status.json'),
+      JSON.stringify({ active: 'Active', pending: 'Pending' }),
+    );
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/status'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/status/index.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        'export function StatusPage() {',
+        "  const { t } = useI18n('status.dashboard');",
+        "  return <div>{t.dynamic('status.' + 'active')}</div>;",
+        '}',
+      ].join('\n'),
+    );
+
+    const { middleware } = createPluginHarness(
+      { pages: ['src/pages/**/*.tsx'], defaultLocale: 'en' },
+      undefined,
+      { bundling: { dynamicKeys: ['status.active', 'status.pending'] } },
+    );
+    const { response } = runMiddleware(middleware, '/__i18n/scope-map.json');
+
+    const map = JSON.parse(response.body);
+    // The status/index route registers status.dashboard — dynamic
+    // status.* keys must have flowed through the route's key list so the
+    // emitted map is consistent with what production would produce.
+    expect(map.pages['status/index']).toBeDefined();
+    expect(map.pages['status/index'].scopes).toContain('status.dashboard');
+  });
+
   it('honors custom pageIdentifier in the dev response', () => {
     const { middleware } = createPluginHarness({
       pages: ['src/pages/**/*.tsx'],

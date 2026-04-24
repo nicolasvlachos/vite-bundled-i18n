@@ -61,6 +61,11 @@ export const t: TFunction = ((...args: Parameters<TFunction>): string => {
   const instance = getGlobalInstance();
   return instance.translate(instance.getLocale(), key, params, fallback);
 }) as TFunction;
+t.dynamic = ((...args: unknown[]): string => {
+  const { key, params, fallback } = resolveArgs(args as ResolveArgsInput);
+  const instance = getGlobalInstance();
+  return instance.translate(instance.getLocale(), key as never, params, fallback);
+}) as TFunction['dynamic'];
 
 /**
  * Checks whether a translation key exists in the currently loaded translations

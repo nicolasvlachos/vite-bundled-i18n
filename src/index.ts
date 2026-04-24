@@ -17,6 +17,15 @@ export { defineI18nData, i18nKey } from './core/data';
 export { t, hasKey, scopedT, setGlobalInstance, getGlobalTranslations } from './core/t';
 export { mountI18nDevtools } from './devtools/mountDevtools';
 export { initServerI18n } from './server';
+export { createReadinessGate } from './core/services/readiness-gate';
+export { createScopeMapClient } from './core/scope-map-client';
+export type { ReadinessGate } from './core/services/readiness-gate';
+export type {
+  ScopeMapClient,
+  ScopeMapFileRuntime,
+  ScopeMapPageEntryRuntime,
+  CreateScopeMapClientOptions,
+} from './core/scope-map-client';
 export type {
   I18nSharedConfig,
 } from './core/config';
