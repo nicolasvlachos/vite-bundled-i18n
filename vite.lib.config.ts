@@ -11,6 +11,7 @@ const entries = {
   plugin: path.resolve(__dirname, 'src/plugin.ts'),
   'cli/index': path.resolve(__dirname, 'src/cli/index.ts'),
   testing: path.resolve(__dirname, 'src/testing.ts'),
+  eslint: path.resolve(__dirname, 'src/eslint.ts'),
   // Shim for the `vite-bundled-i18n/generated` runtime export. Empty
   // placeholder; the plugin overrides this via a resolve.alias at build time.
   'core/i18n-generated-shim': path.resolve(__dirname, 'src/core/i18n-generated-shim.ts'),
@@ -53,6 +54,7 @@ export default defineConfig({
         'vite',
         'typescript',
         'tinyglobby',
+        'eslint',
         /^node:/,
       ],
       output: {

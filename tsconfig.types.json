@@ -31,7 +31,9 @@
     "src/react/**/*.tsx",
     "src/extractor/**/*.ts",
     "src/plugin/**/*.ts",
-    "src/cli/**/*.ts"
+    "src/cli/**/*.ts",
+    "src/eslint.ts",
+    "src/eslint/**/*.ts"
   ],
   "exclude": [
     "src/**/__tests__/**"

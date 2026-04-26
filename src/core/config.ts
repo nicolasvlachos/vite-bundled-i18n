@@ -1,4 +1,5 @@
 import type { DictionaryConfig } from './types';
+import type { StrictExtractionConfig } from '../extractor/strict-extraction';
 
 /**
  * Shared i18n configuration used by both the runtime (`createI18n`) and
@@ -67,8 +68,37 @@ export interface I18nSharedConfig {
      * - `'off'` — no check
      * - `'warn'` (default) — log a warning per offender via Vite's logger
      * - `'error'` — throw during the build; fails CI
+     *
+     * @deprecated since v0.7. Use `bundling.strictExtraction.scopeRegistration`
+     * instead. This field is honored as a fallback when `strictExtraction`
+     * is not set, so existing configs keep working without changes.
      */
     strictScopeRegistration?: 'off' | 'warn' | 'error';
+    /**
+     * Unified extraction-correctness audit (v0.7+). Subsumes
+     * `strictScopeRegistration` (still honored when this is unset) and
+     * adds three more checks:
+     *
+     * - `scopeRegistration` — page registers no `useI18n('<scope>')`
+     * - `missingKeys`       — static `t('foo.bar')` references a key absent from every locale namespace
+     * - `unusedKeys`        — locale key never referenced by any route
+     * - `orphanDynamic`     — `bundling.dynamicKeys` entry that matches no route AND no dictionary
+     *
+     * Shorthand: a string sets every check to that mode (`'warn'`/`'error'`/`'off'`).
+     * Object form: `mode` sets the default; per-check fields override.
+     *
+     * Always writes a structured JSON report to
+     * `<generatedOutDir>/strict-extraction-report.json` (configurable via
+     * `reportPath`) so CI tooling can parse findings without scraping logs.
+     *
+     * @example
+     * ```ts
+     * bundling: {
+     *   strictExtraction: { mode: 'warn', missingKeys: 'error' },
+     * }
+     * ```
+     */
+    strictExtraction?: StrictExtractionConfig;
     /**
      * Fully qualified keys the extractor can't see from static `t()` calls —
      * e.g. keys built from variables (`t.dynamic(\`status.\${state}\`)`) or

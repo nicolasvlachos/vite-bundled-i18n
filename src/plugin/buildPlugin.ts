@@ -11,13 +11,24 @@ import type { ProjectAnalysis } from '../extractor/walker-types';
 import {
   createExtractionCache,
   computeConfigHash,
+  CACHE_FILE_NAME,
   type ExtractionCache,
 } from '../extractor/extraction-cache';
 import { resolveCacheConfig, type CacheOptionInput } from '../extractor/cache-config';
 import { PLUGIN_VERSION } from './version';
 import { buildScopeMap, type PageIdentifierFn } from '../extractor/scope-map';
-import { checkScopeRegistration } from '../extractor/scope-registration';
 import { applyDynamicKeys } from '../extractor/dynamic-keys';
+import {
+  runStrictExtraction,
+  writeStrictExtractionReport,
+  assertNoStrictExtractionErrors,
+} from '../extractor/strict-extraction';
+import {
+  computeAnalysisFingerprint,
+  detectStaleness,
+  writeBuildStamp,
+  BUILD_STAMP_SCHEMA_VERSION,
+} from '../extractor/build-stamp';
 
 export interface I18nBuildPluginConfig {
   /** Glob patterns for route/page entry points. */
@@ -134,6 +145,32 @@ export function runProjectAnalysis(
   const { localesDir, extractionScope } = resolved;
 
   const cacheSettings = resolveCacheConfig(buildConfig.cache, { rootDir });
+  const configHash = computeConfigHash({
+    pages: buildConfig.pages,
+    defaultLocale: buildConfig.defaultLocale,
+    extractionScope,
+    hookSources: sharedConfig.extraction?.hookSources,
+    keyFields: sharedConfig.extraction?.keyFields,
+    dictionaries: sharedConfig.dictionaries,
+    crossNamespacePacking: sharedConfig.bundling?.crossNamespacePacking,
+  });
+
+  // Staleness check: a build-stamp from a prior successful build, compared
+  // against the current extraction cache mtime + plugin version + config
+  // hash. Surfaces a single warning so the operator knows to run a clean
+  // rebuild instead of silently shipping stale prod bundles.
+  // Runs before we touch the cache so we observe the on-disk truth from
+  // the previous build.
+  const stalenessReport = detectStaleness({
+    generatedOutDir: resolved.generatedOutDir,
+    cacheFilePath: path.join(cacheSettings.dir, CACHE_FILE_NAME),
+    pluginVersion: PLUGIN_VERSION,
+    configHash,
+  });
+  if (stalenessReport) {
+    logger.warn(stalenessReport.message);
+  }
+
   let extractionCache: ExtractionCache | undefined;
   if (cacheSettings.enabled) {
     if (cacheSettings.clearBeforeStart) {
@@ -142,15 +179,7 @@ export function runProjectAnalysis(
     extractionCache = createExtractionCache({
       dir: cacheSettings.dir,
       pluginVersion: PLUGIN_VERSION,
-      configHash: computeConfigHash({
-        pages: buildConfig.pages,
-        defaultLocale: buildConfig.defaultLocale,
-        extractionScope,
-        hookSources: sharedConfig.extraction?.hookSources,
-        keyFields: sharedConfig.extraction?.keyFields,
-        dictionaries: sharedConfig.dictionaries,
-        crossNamespacePacking: sharedConfig.bundling?.crossNamespacePacking,
-      }),
+      configHash,
       debug: cacheSettings.debug,
     });
   }
@@ -162,6 +191,7 @@ export function runProjectAnalysis(
     defaultLocale: buildConfig.defaultLocale,
     extractionScope,
     hookSources: sharedConfig.extraction?.hookSources,
+    keyFields: sharedConfig.extraction?.keyFields,
     cache: extractionCache,
   });
 
@@ -194,33 +224,60 @@ export function applyPostWalkAudits(
 ): void {
   const { sharedConfig } = options;
 
+  // Dynamic-key INJECTION (mutation, not audit) — keeps running first so
+  // the strict-extraction's orphan-dynamic check sees the post-injection
+  // route shape. The audit-style orphan reporting now lives inside
+  // `runStrictExtraction` so it's part of the unified report.
   if (sharedConfig.bundling?.dynamicKeys && sharedConfig.bundling.dynamicKeys.length > 0) {
-    const dynamicReport = applyDynamicKeys(analysis, {
+    applyDynamicKeys(analysis, {
       dynamicKeys: sharedConfig.bundling.dynamicKeys,
       dictionaries: sharedConfig.dictionaries,
       crossNamespacePacking: sharedConfig.bundling.crossNamespacePacking,
     });
-    for (const orphan of dynamicReport.orphans) {
-      logger.warn(
-        `[vite-bundled-i18n] dynamicKeys entry "${orphan}" matches no route and no dictionary — ` +
-          `it won't ship anywhere. Remove it or add a matching scope/dictionary.`,
-      );
+  }
+
+  // Resolve paths needed by strictExtraction's defaults — done inline
+  // because applyPostWalkAudits is called from multiple sites and we
+  // can't depend on `resolved` being threaded in (the dev-plugin path
+  // calls it without one).
+  const generatedOutDir = options.buildConfig.generatedOutDir
+    ? path.resolve(options.rootDir, options.buildConfig.generatedOutDir)
+    : path.join(options.rootDir, '.i18n');
+  const localesDir = path.isAbsolute(sharedConfig.localesDir)
+    ? sharedConfig.localesDir
+    : path.join(options.rootDir, sharedConfig.localesDir);
+  const defaultReportPath = path.join(generatedOutDir, 'strict-extraction-report.json');
+
+  // Run the unified strictExtraction audit (replaces the standalone
+  // strictScopeRegistration call). Backward compat: when only the
+  // legacy `strictScopeRegistration` field is set, it's threaded into
+  // `runStrictExtraction` as the scopeRegistration mode default.
+  const strictReport = runStrictExtraction({
+    analysis,
+    rootDir: options.rootDir,
+    localesDir,
+    defaultLocale: options.buildConfig.defaultLocale,
+    dictionaries: sharedConfig.dictionaries,
+    dynamicKeys: sharedConfig.bundling?.dynamicKeys,
+    config: sharedConfig.bundling?.strictExtraction,
+    legacyStrictScopeRegistration: sharedConfig.bundling?.strictScopeRegistration,
+    defaultReportPath,
+  });
+
+  // Always persist the structured report — observability primitive,
+  // independent of severity. CI tooling can parse it without scraping.
+  writeStrictExtractionReport(defaultReportPath, strictReport);
+
+  // Surface every warn-level finding through the logger; let the assert
+  // helper raise on errors (so the build aborts cleanly with all the
+  // error messages bundled into one Error).
+  for (const finding of strictReport.findings) {
+    if (finding.severity === 'warn') {
+      logger.warn(`[vite-bundled-i18n strictExtraction/${finding.check}] ${finding.message}`);
     }
   }
 
-  const strictMode = sharedConfig.bundling?.strictScopeRegistration ?? 'warn';
-  if (strictMode !== 'off') {
-    const report = checkScopeRegistration(analysis, { rootDir: options.rootDir, mode: strictMode });
-    if (report.violations.length > 0) {
-      if (strictMode === 'error') {
-        throw new Error(
-          'vite-bundled-i18n: scope registration failures (strictScopeRegistration: \'error\'):\n\n' +
-            report.messages.join('\n\n'),
-        );
-      }
-      for (const message of report.messages) logger.warn(message);
-    }
-  }
+  assertNoStrictExtractionErrors(strictReport);
 }
 
 /**
@@ -336,6 +393,37 @@ export function emitBundlesArtifacts(
       `  Hint: Subdirectories are not supported. Each namespace must be a single flat JSON file.`
     );
   }
+
+  // Build-stamp: records the cache mtime AT this moment so the next run's
+  // `detectStaleness` knows the truthful "last cache state observed by a
+  // successful build." Comparing against the stamp's own mtime would
+  // falsely flag any build that took longer than `gracePeriodMs`. Failure
+  // is swallowed inside writeBuildStamp — the stamp is observability,
+  // never correctness.
+  const stampConfigHash = computeConfigHash({
+    pages: buildConfig.pages,
+    defaultLocale: buildConfig.defaultLocale,
+    extractionScope: resolved.extractionScope,
+    hookSources: sharedConfig.extraction?.hookSources,
+    keyFields: sharedConfig.extraction?.keyFields,
+    dictionaries: sharedConfig.dictionaries,
+    crossNamespacePacking: sharedConfig.bundling?.crossNamespacePacking,
+  });
+  const cacheSettingsForStamp = resolveCacheConfig(buildConfig.cache, { rootDir });
+  let cacheMtimeAtStampWrite: number | null = null;
+  try {
+    cacheMtimeAtStampWrite = fs.statSync(path.join(cacheSettingsForStamp.dir, CACHE_FILE_NAME)).mtimeMs;
+  } catch { /* cache disabled or not yet written */ }
+  writeBuildStamp(generatedOutDir, {
+    schemaVersion: BUILD_STAMP_SCHEMA_VERSION,
+    pluginVersion: PLUGIN_VERSION,
+    configHash: stampConfigHash,
+    analysisFingerprint: computeAnalysisFingerprint(analysis),
+    routeCount: analysis.routes.length,
+    keyCount: analysis.allKeys.length,
+    cacheMtimeAtStampWrite,
+    writtenAt: new Date().toISOString(),
+  });
 
   return {
     bundleCount: bundles.length,

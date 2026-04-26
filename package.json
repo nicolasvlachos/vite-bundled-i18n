@@ -1,7 +1,7 @@
 {
   "name": "vite-bundled-i18n",
   "private": false,
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "Route-aware i18n bundler for Vite. Translations are AST-extracted, tree-shaken per page, and shipped as scope-matched bundles — not loaded globally.",
   "type": "module",
   "types": "./dist/index.d.ts",
@@ -72,6 +72,10 @@
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
     },
+    "./eslint": {
+      "types": "./dist/eslint.d.ts",
+      "default": "./dist/eslint.js"
+    },
     "./generated": {
       "types": "./dist/core/i18n-generated.d.ts",
       "default": "./dist/core/i18n-generated-shim.js"
@@ -89,7 +93,8 @@
   "peerDependencies": {
     "react": ">=18",
     "react-dom": ">=18",
-    "vue": "^3.0.0"
+    "vue": "^3.0.0",
+    "eslint": ">=8"
   },
   "peerDependenciesMeta": {
     "react": {
@@ -99,6 +104,9 @@
       "optional": true
     },
     "vue": {
+      "optional": true
+    },
+    "eslint": {
       "optional": true
     }
   },

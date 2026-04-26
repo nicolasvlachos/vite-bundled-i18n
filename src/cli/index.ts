@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { analyze, generate, compile, report, build } from './commands';
-import type { CliConfig } from './commands';
+import { analyze, generate, compile, report, build, clean, rebuild } from './commands';
+import type { CliConfig, CleanOptions } from './commands';
 
-const COMMANDS = ['analyze', 'generate', 'compile', 'report', 'build'] as const;
+const COMMANDS = ['analyze', 'generate', 'compile', 'report', 'build', 'clean', 'rebuild'] as const;
 type Command = (typeof COMMANDS)[number];
 
 function printUsage(): void {
@@ -16,11 +16,15 @@ function printUsage(): void {
   console.log('  report    — Generate diagnostic reports (manifest, missing, unused, stats)');
   console.log('  compile   — Compile pre-resolved flat Map modules for production');
   console.log('  build     — Run analyze + generate + compile + report in one step');
+  console.log('  clean     — Remove .i18n/ generated artifacts (extraction cache, reports, types, build-stamp)');
+  console.log('  rebuild   — clean + build (use when prod bundles look stale or out-of-sync)');
   console.log('');
   console.log('Options:');
-  console.log('  --config <path>  Path to config file (default: i18n.config.json)');
-  console.log('  --no-cache       Disable the extraction cache for this run');
-  console.log('  --clear-cache    Clear the extraction cache before running');
+  console.log('  --config <path>      Path to config file (default: i18n.config.json)');
+  console.log('  --no-cache           Disable the extraction cache for this run');
+  console.log('  --clear-cache        Clear the extraction cache before running');
+  console.log('  --extra-path <path>  (clean/rebuild) Additional path to remove. Repeatable.');
+  console.log('  --allow-outside-root (clean/rebuild) Permit --extra-path entries outside the project root.');
 }
 
 function loadConfig(configPath: string): CliConfig {
@@ -39,6 +43,8 @@ interface ParsedArgs {
   configPath: string;
   noCache: boolean;
   clearCache: boolean;
+  extraPaths: string[];
+  allowOutsideRoot: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -47,6 +53,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let configPath = 'i18n.config.json';
   let noCache = false;
   let clearCache = false;
+  let allowOutsideRoot = false;
+  const extraPaths: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -56,6 +64,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       noCache = true;
     } else if (arg === '--clear-cache') {
       clearCache = true;
+    } else if (arg === '--extra-path' && i + 1 < args.length) {
+      extraPaths.push(args[++i]);
+    } else if (arg === '--allow-outside-root') {
+      allowOutsideRoot = true;
     } else if (arg === '--help' || arg === '-h') {
       printUsage();
       process.exit(0);
@@ -73,10 +85,30 @@ function parseArgs(argv: string[]): ParsedArgs {
     process.exit(1);
   }
 
-  return { command: command!, configPath, noCache, clearCache };
+  return { command: command!, configPath, noCache, clearCache, extraPaths, allowOutsideRoot };
 }
 
-const { command, configPath, noCache, clearCache } = parseArgs(process.argv);
+const { command, configPath, noCache, clearCache, extraPaths, allowOutsideRoot } = parseArgs(process.argv);
+
+// `clean` is the only command that doesn't strictly require a config file —
+// it operates on `outDir` (defaults to `.i18n/`) plus any `--extra-path`
+// values. If a config exists we honor its `outDir`; otherwise we fall
+// back to the default. This keeps `npx vite-bundled-i18n clean` usable
+// even when the config has been moved or deleted.
+if (command === 'clean') {
+  const cleanConfig: CliConfig | null = fs.existsSync(path.resolve(configPath))
+    ? loadConfig(configPath)
+    : null;
+  const cleanOpts: CleanOptions = {
+    rootDir: cleanConfig?.rootDir,
+    outDir: cleanConfig?.outDir,
+    extraPaths,
+    allowOutsideRoot,
+  };
+  clean(cleanOpts);
+  process.exit(0);
+}
+
 const config = loadConfig(configPath);
 
 // CLI flags merge into the config's `cache` field so downstream resolution
@@ -91,7 +123,12 @@ if (clearCache) {
   process.env.VITE_I18N_CLEAR_CACHE = '1';
 }
 
-const commands: Record<Command, (cfg: CliConfig) => void> = {
+if (command === 'rebuild') {
+  rebuild(config, { extraPaths, allowOutsideRoot });
+  process.exit(0);
+}
+
+const commands: Record<Exclude<Command, 'clean' | 'rebuild'>, (cfg: CliConfig) => void> = {
   analyze,
   generate,
   compile,
@@ -99,4 +136,4 @@ const commands: Record<Command, (cfg: CliConfig) => void> = {
   build,
 };
 
-commands[command](config);
+commands[command as Exclude<Command, 'clean' | 'rebuild'>](config);

@@ -179,6 +179,8 @@ export function walkRoute(
     rootDir: string;
     extractionScope: 'global' | 'scoped';
     hookSources?: string[];
+    /** Forwarded to `extractKeys`. Pre-v0.7 the build path silently dropped this. */
+    keyFields?: string[];
     cache?: ExtractionCache;
   },
 ): RouteAnalysis {
@@ -250,6 +252,7 @@ export function walkRoute(
       scope: options.extractionScope,
       filePath: resolved,
       hookSources: options.hookSources,
+      keyFields: options.keyFields,
     });
     if (isEntry) {
       entryVisited = true;
@@ -303,6 +306,7 @@ export function walkAll(options: WalkerOptions): ProjectAnalysis {
       rootDir,
       extractionScope,
       hookSources: options.hookSources,
+      keyFields: options.keyFields,
       cache: options.cache,
     }),
   );

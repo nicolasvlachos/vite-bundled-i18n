@@ -515,6 +515,116 @@ cache: {
 }
 ```
 
+### Build artifacts and the build-stamp
+
+Every successful build writes `.i18n/build-stamp.json` recording the plugin version, config hash, and an analysis fingerprint (route ids → scopes + sorted extracted keys). The next build reads this stamp and warns when:
+
+- the extraction cache exists but no stamp does (a previous build never finished),
+- the plugin version recorded in the stamp differs from the current version,
+- the extraction-relevant config has changed since the stamp was written, or
+- the extraction cache file is materially newer than the stamp (dev-mode edits have advanced the cache without a corresponding production build).
+
+The warning is one line, surfaced through Vite's logger, and never blocks the build. It exists so a stale `.i18n/` is loud rather than silent.
+
+### Troubleshooting: "a key is missing from a per-scope bundle"
+
+After large refactors (mass `t.dynamic` migrations, sweeping renames, hook restructures), the per-file extraction cache and the downstream artifacts in `.i18n/` can drift if a build was interrupted partway through. The reliable recovery move:
+
+```bash
+npx vite-bundled-i18n clean   # rm -rf .i18n/
+# then your build command, e.g.
+npm run build
+```
+
+…or in one step:
+
+```bash
+npx vite-bundled-i18n rebuild --config i18n.config.json
+```
+
+If after that the key is _still_ missing, the issue is in the source — not the cache — and the bundle output reflects the truth. File a bug.
+
+The CLI's `clean` command accepts repeatable `--extra-path` flags for project layouts that emit assets outside `.i18n/` (e.g. `--extra-path public/__i18n --extra-path public/build/__i18n`).
+
+## ESLint plugin
+
+`vite-bundled-i18n/eslint` ships five rules that catch the patterns the extractor cannot see — keys reached through aliases, props, member access, or runtime concatenation. Same package, optional peer dep on `eslint >= 8`, opt in via the subpath:
+
+```ts
+// eslint.config.js (flat, ESLint 9+)
+import i18n from 'vite-bundled-i18n/eslint';
+
+export default [
+  i18n.flatConfigs.recommended, // four rules at 'warn'
+];
+```
+
+```js
+// .eslintrc.cjs (legacy, ESLint 8)
+module.exports = {
+  extends: ['plugin:vite-bundled-i18n/recommended'],
+};
+```
+
+The rules:
+
+| Rule | Catches |
+|------|---------|
+| `no-t-dynamic` | Every `t.dynamic(...)` call — escape hatch should be the exception, not the default |
+| `no-non-literal-t-arg` | `t(variable)`, `t(\`tpl\`)`, `t(cond ? a : b)` — argument must be a string literal |
+| `no-renamed-t` | `const { t: translate } = useI18n()` and aliases (autofixes the destructure) |
+| `no-member-access-t` | `props.t(...)`, `this.i18n.t(...)`, any `<expr>.t()` — extractor only sees bare `t` |
+| `t-arg-must-exist-in-types` | `t('typo.in.namespace')` — verifies the literal against your locale JSON files |
+
+The `recommended` preset turns the first four to `warn`. The `strict` preset turns every rule to `error` AND enables `t-arg-must-exist-in-types` (with `localesDir: 'locales'`, `defaultLocale: 'en'` defaults — override per-rule if your layout differs):
+
+```ts
+import i18n from 'vite-bundled-i18n/eslint';
+export default [
+  i18n.flatConfigs.strict,
+  // Override the locale paths if needed:
+  {
+    rules: {
+      'vite-bundled-i18n/t-arg-must-exist-in-types': ['error', {
+        localesDir: 'i18n',
+        defaultLocale: 'en-US',
+      }],
+    },
+  },
+];
+```
+
+> **Parser config.** The presets carry only `plugins` and `rules` — they don't set `languageOptions`. Pair them with your existing parser config (e.g. `@typescript-eslint/parser` for TS/TSX) the same way you would for any other ESLint plugin. The presets stay parser-agnostic so they don't force an extra peer dep on consumers who already wire up their own parser.
+
+## Strict extraction
+
+`bundling.strictExtraction` (v0.7+) gates the build on extraction-correctness checks. Pair it with the ESLint plugin: the lint rules block the patterns at edit time; `strictExtraction` is the CI safety net for what slipped through.
+
+```ts
+defineI18nConfig({
+  bundling: {
+    // Shorthand: every check at the same level.
+    strictExtraction: 'warn',
+
+    // OR: object form for per-check control.
+    strictExtraction: {
+      mode: 'warn',
+      scopeRegistration: 'error',  // page registers no useI18n('<scope>')
+      missingKeys: 'error',        // t('foo.bar') references a missing locale key
+      unusedKeys: 'off',           // locale key never referenced (noise on bootstrap)
+      orphanDynamic: 'warn',       // dynamicKeys entry matches no route or dictionary
+      // reportPath: '.i18n/strict-extraction-report.json' (default)
+    },
+  },
+})
+```
+
+Every build writes a structured JSON report at `<generatedOutDir>/strict-extraction-report.json` regardless of severity — CI tooling can parse `findings[]` without scraping logs. Each finding records `check`, `severity`, `message`, and a free-form `details` payload (file paths, key names, etc.).
+
+The legacy `bundling.strictScopeRegistration` field is honored as a fallback when `strictExtraction` is not set, so existing configs keep working without changes.
+
+> **Build-time only.** `strictExtraction` runs during `vite build` and the CLI's `vite-bundled-i18n build` (and friends). `vite dev` does not run it — to keep dev startup fast and HMR latency low, no on-edit re-audit fires. Pair `strictExtraction` with the ESLint plugin to get most of the same coverage at edit time.
+
 ## Testing
 
 Unit tests and integration tests import from `vite-bundled-i18n/testing`. `createTestI18n` returns a synchronous instance seeded with translations you supply — no network, no pending promises, gate starts ready:
@@ -563,6 +673,7 @@ app.use(createI18nTestPlugin(i18n))
 | `vite-bundled-i18n/plugin` | Vite plugin (`i18nPlugin`) |
 | `vite-bundled-i18n/generated` | Generated types + `PAGE_SCOPE_MAP` / `I18nPageIdentifier` |
 | `vite-bundled-i18n/testing` | `createTestI18n`, `I18nTestProvider`, `createI18nTestPlugin` |
+| `vite-bundled-i18n/eslint` | ESLint plugin + `recommended` / `strict` presets (5 rules) |
 
 ## Documentation
 
@@ -572,7 +683,13 @@ app.use(createI18nTestPlugin(i18n))
 
 ## Releases
 
-Current release: **v0.6.1** — lean dev bundles (dev responses tree-shaken by default, ~95% smaller on large apps). Built on v0.6.0's framework-agnostic readiness gate (`i18n.gate`, `<GateBoundary>`, `useGate()`), runtime `createScopeMapClient()`, `t.dynamic()` escape hatch, `bundling.dynamicKeys` + `strictScopeRegistration`, `vite-bundled-i18n/testing` subpackage. Breaking in v0.6.0: `loadScope` auto-registers with the gate by default — opt out via `{ trackReadiness: false }`.
+Current release: **v0.6.3** — three loosely-related shipments:
+
+- **Build-stamp + staleness detection.** Every successful build writes `.i18n/build-stamp.json` recording the cache mtime it observed; the next build compares against that anchor (not against the stamp file's own mtime, so multi-minute builds and dev sessions no longer look stale). Cache schema bumped v1 → v2 (one-time auto-invalidation on upgrade). New CLI commands `clean` and `rebuild` formalize the recovery path; `--extra-path` is constrained to paths inside `rootDir` unless `--allow-outside-root` is set.
+- **ESLint plugin.** `vite-bundled-i18n/eslint` ships 5 rules (`no-t-dynamic`, `no-non-literal-t-arg`, `no-renamed-t`, `no-member-access-t`, `t-arg-must-exist-in-types`) with both `recommended` (warn) and `strict` (error + `t-arg-must-exist-in-types` enabled) presets. Both flat-config (ESLint 9+) and legacy (ESLint 8) shapes. Bracket-access variants (`t['dynamic']`, `props['t']`) are covered alongside dot access.
+- **`bundling.strictExtraction`.** Unified extraction-correctness audit. Subsumes the legacy `strictScopeRegistration` (still honored as a fallback). Adds `missingKeys` / `unusedKeys` / `orphanDynamic` checks. Always writes a structured JSON report at `<generatedOutDir>/strict-extraction-report.json` for CI consumption. Build-time only — pair with the ESLint plugin for edit-time coverage.
+
+Built on v0.6.2's dev/prod parity for scope-bundle filtering, v0.6.1's lean dev bundles, and v0.6.0's framework-agnostic readiness gate.
 
 Version history lives in the [git log](https://github.com/nicolasvlachos/vite-bundled-i18n/commits/main) — each release is a `feat: v{version}` commit with a summary of the changes.
 

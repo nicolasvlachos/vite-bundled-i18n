@@ -11,13 +11,26 @@ import { flattenLocaleKeys } from '../extractor/reports';
 import {
   createExtractionCache,
   computeConfigHash,
+  CACHE_FILE_NAME,
   type ExtractionCache,
 } from '../extractor/extraction-cache';
 import { resolveCacheConfig } from '../extractor/cache-config';
 import { PLUGIN_VERSION } from '../plugin/version';
 import { buildScopeMap } from '../extractor/scope-map';
 import { applyDynamicKeys } from '../extractor/dynamic-keys';
-import { checkScopeRegistration } from '../extractor/scope-registration';
+import {
+  runStrictExtraction,
+  writeStrictExtractionReport,
+  assertNoStrictExtractionErrors,
+  type StrictExtractionConfig,
+} from '../extractor/strict-extraction';
+import {
+  computeAnalysisFingerprint,
+  detectStaleness,
+  writeBuildStamp,
+  BUILD_STAMP_SCHEMA_VERSION,
+  BUILD_STAMP_FILE_NAME,
+} from '../extractor/build-stamp';
 
 export interface CliConfig {
   /** Glob patterns for page entry points. */
@@ -41,6 +54,14 @@ export interface CliConfig {
   /** Additional module specifiers that export `useI18n`. */
   hookSources?: string[];
   /**
+   * Additional property names to scan as translation key fields.
+   * Mirrors `I18nSharedConfig.extraction.keyFields`. Threaded through
+   * to the walker AND to the cache `configHash` so CLI-driven and
+   * Vite-driven builds produce identical hashes (otherwise alternating
+   * between the two would invalidate the cache on every switch).
+   */
+  keyFields?: string[];
+  /**
    * Inline cross-namespace keys (tree-shaken) into each scope bundle.
    * See `I18nSharedConfig.bundling.crossNamespacePacking`.
    */
@@ -54,8 +75,17 @@ export interface CliConfig {
   /**
    * Severity for the "page registers no scope" audit. Matches
    * `I18nSharedConfig.bundling.strictScopeRegistration`.
+   *
+   * @deprecated since v0.7. Use `strictExtraction.scopeRegistration`
+   * instead. Honored as a fallback when `strictExtraction` is not set.
    */
   strictScopeRegistration?: 'off' | 'warn' | 'error';
+  /**
+   * Unified extraction-correctness audit (v0.7+). Matches
+   * `I18nSharedConfig.bundling.strictExtraction`. See that field's
+   * docs for the full shape.
+   */
+  strictExtraction?: StrictExtractionConfig;
   /**
    * Extraction cache control. `false` disables, an object configures the
    * backing directory and persistence. Env vars (`VITE_I18N_NO_CACHE`,
@@ -102,6 +132,7 @@ function buildCliCache(config: CliConfig, rootDir: string): ExtractionCache | un
       defaultLocale: config.defaultLocale,
       extractionScope: config.extractionScope ?? 'global',
       hookSources: config.hookSources,
+      keyFields: config.keyFields,
       dictionaries: config.dictionaries,
       crossNamespacePacking: config.crossNamespacePacking,
     }),
@@ -127,39 +158,42 @@ function runWalker(config: CliConfig, cache?: ExtractionCache): ProjectAnalysis 
     defaultLocale: config.defaultLocale,
     extractionScope,
     hookSources: config.hookSources,
+    keyFields: config.keyFields,
     cache,
   });
 
-  // Mirror the build plugin: apply declared dynamic keys and audit scope
-  // registration so CLI-generated artifacts match `vite build` exactly.
-  // Shared primitive, same semantics, no drift.
+  // Mirror the build plugin: apply declared dynamic keys, run the
+  // strict-extraction audit, and persist the structured report. Same
+  // primitives, identical semantics — keeps CLI-driven and Vite-driven
+  // builds in lockstep so swapping between them never surprises CI.
   if (config.dynamicKeys && config.dynamicKeys.length > 0) {
-    const report = applyDynamicKeys(analysis, {
+    applyDynamicKeys(analysis, {
       dynamicKeys: config.dynamicKeys,
       dictionaries: config.dictionaries,
       crossNamespacePacking: config.crossNamespacePacking,
     });
-    for (const orphan of report.orphans) {
-      console.warn(
-        `[vite-bundled-i18n] dynamicKeys entry "${orphan}" matches no route ` +
-          `and no dictionary — it won't ship anywhere.`,
-      );
-    }
   }
 
-  const strictMode = config.strictScopeRegistration ?? 'warn';
-  if (strictMode !== 'off') {
-    const report = checkScopeRegistration(analysis, { rootDir, mode: strictMode });
-    if (report.violations.length > 0) {
-      if (strictMode === 'error') {
-        throw new Error(
-          'vite-bundled-i18n: scope registration failures (strictScopeRegistration: \'error\'):\n\n' +
-            report.messages.join('\n\n'),
-        );
-      }
-      for (const message of report.messages) console.warn(message);
+  const { outDir } = resolveConfig(config);
+  const defaultReportPath = path.join(outDir, 'strict-extraction-report.json');
+  const strictReport = runStrictExtraction({
+    analysis,
+    rootDir,
+    localesDir,
+    defaultLocale: config.defaultLocale,
+    dictionaries: config.dictionaries,
+    dynamicKeys: config.dynamicKeys,
+    config: config.strictExtraction,
+    legacyStrictScopeRegistration: config.strictScopeRegistration,
+    defaultReportPath,
+  });
+  writeStrictExtractionReport(defaultReportPath, strictReport);
+  for (const finding of strictReport.findings) {
+    if (finding.severity === 'warn') {
+      console.warn(`[vite-bundled-i18n strictExtraction/${finding.check}] ${finding.message}`);
     }
   }
+  assertNoStrictExtractionErrors(strictReport);
 
   return analysis;
 }
@@ -417,8 +451,220 @@ export function build(config: CliConfig): void {
   // Reports
   generateReports(analysis, localesDir, config.defaultLocale, outDir, config.dictionaries);
 
+  // Build-stamp: mirrors the Vite build plugin so CLI-driven and Vite-driven
+  // builds produce the same observability artifact. Without this, a project
+  // that runs `npx vite-bundled-i18n build` would never get the staleness
+  // warning on the next run. Records the cache mtime at stamp-write time
+  // so subsequent staleness checks compare against the cache state THIS
+  // build observed (not against the stamp file's own mtime, which would
+  // make multi-minute builds and dev sessions look perpetually stale).
+  const stampCacheSettings = resolveCacheConfig(config.cache, { rootDir });
+  let cacheMtimeAtStampWrite: number | null = null;
+  try {
+    cacheMtimeAtStampWrite = fs.statSync(path.join(stampCacheSettings.dir, CACHE_FILE_NAME)).mtimeMs;
+  } catch { /* cache disabled or absent */ }
+  writeBuildStamp(outDir, {
+    schemaVersion: BUILD_STAMP_SCHEMA_VERSION,
+    pluginVersion: PLUGIN_VERSION,
+    configHash: computeConfigHash({
+      pages: config.pages,
+      defaultLocale: config.defaultLocale,
+      extractionScope: config.extractionScope ?? 'global',
+      hookSources: config.hookSources,
+      keyFields: config.keyFields,
+      dictionaries: config.dictionaries,
+      crossNamespacePacking: config.crossNamespacePacking,
+    }),
+    analysisFingerprint: computeAnalysisFingerprint(analysis),
+    routeCount: analysis.routes.length,
+    keyCount: analysis.allKeys.length,
+    cacheMtimeAtStampWrite,
+    writtenAt: new Date().toISOString(),
+  });
+
   console.log(`Reports written to ${outDir}`);
   console.log(
     `\nDone. ${analysis.routes.length} route(s), ${analysis.allKeys.length} unique key(s).`,
   );
+}
+
+/**
+ * `clean` — remove generated artifacts so the next build starts from a
+ * known-good state. The recommended workaround whenever a per-scope bundle
+ * looks stale or out-of-sync with the source locale files.
+ *
+ * Removes:
+ * - the configured `outDir` (`.i18n/` by default) — extraction cache,
+ *   reports, generated types, build stamp.
+ *
+ * Vite's own asset output (e.g. `public/build/__i18n/`) lives in Vite's
+ * configured outDir, not here, and is rewritten on every `vite build` —
+ * so there's nothing to clean from this side.
+ *
+ * Returns the number of paths removed; safe to call when nothing exists.
+ *
+ * Safety rails: by default, `extraPaths` entries are constrained to
+ * paths INSIDE `rootDir`. An attempt to delete `/`, `~`, `..`, or any
+ * absolute path outside `rootDir` is rejected with a logged refusal.
+ * Operators who genuinely need to wipe an external path pass
+ * `allowOutsideRoot: true` — they're explicitly opting in.
+ */
+export interface CleanOptions {
+  /** Project root. Defaults to `process.cwd()`. */
+  rootDir?: string;
+  /** Generated output directory to remove. Mirrors `CliConfig.outDir`. Defaults to `.i18n`. */
+  outDir?: string;
+  /**
+   * Additional absolute or rootDir-relative paths to remove. Use for
+   * project-specific layouts (e.g. Laravel's `public/build/__i18n`,
+   * `public/__i18n` for dev-emitted assets). Constrained to paths
+   * inside `rootDir` unless {@link allowOutsideRoot} is `true`.
+   */
+  extraPaths?: string[];
+  /**
+   * Allow `extraPaths` entries that resolve outside `rootDir`. Off by
+   * default — protects operators from `--extra-path /` mishaps.
+   * @default false
+   */
+  allowOutsideRoot?: boolean;
+  /** Suppress console output. */
+  quiet?: boolean;
+}
+
+export interface CleanResult {
+  removed: string[];
+  missing: string[];
+  /** Paths that were rejected by the safety rails (outside rootDir + allowOutsideRoot=false). */
+  rejected: string[];
+}
+
+/**
+ * Resolve a user-supplied extra path to an absolute path and validate
+ * it against the rootDir containment rule. Returns `null` when the
+ * path is rejected.
+ */
+function resolveExtraPath(raw: string, rootDir: string, allowOutsideRoot: boolean): string | null {
+  const abs = path.resolve(rootDir, raw);
+  if (allowOutsideRoot) return abs;
+
+  const normalizedRoot = path.resolve(rootDir);
+  const rel = path.relative(normalizedRoot, abs);
+  // `rel` starts with `..` (or is absolute on Windows-cross-drive) when
+  // `abs` is outside `rootDir`. Empty `rel` means abs === rootDir,
+  // which is dangerous in its own right (would wipe the whole project)
+  // — also reject.
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  return abs;
+}
+
+export function clean(options: CleanOptions = {}): CleanResult {
+  const rootDir = options.rootDir ?? process.cwd();
+  const allowOutsideRoot = options.allowOutsideRoot === true;
+  const outDir = options.outDir
+    ? (path.isAbsolute(options.outDir) ? options.outDir : path.join(rootDir, options.outDir))
+    : path.join(rootDir, '.i18n');
+
+  // outDir is operator-controlled via config; trust it (matches the
+  // pre-fix behavior). Only `extraPaths` is rate-limited.
+  const targets: string[] = [outDir];
+  const rejected: string[] = [];
+
+  for (const raw of options.extraPaths ?? []) {
+    const resolved = resolveExtraPath(raw, rootDir, allowOutsideRoot);
+    if (resolved === null) {
+      rejected.push(raw);
+      continue;
+    }
+    targets.push(resolved);
+  }
+
+  const removed: string[] = [];
+  const missing: string[] = [];
+
+  for (const target of targets) {
+    let existed = false;
+    try {
+      existed = fs.existsSync(target);
+    } catch { /* treat as missing */ }
+
+    if (!existed) {
+      missing.push(target);
+      continue;
+    }
+
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+      removed.push(target);
+    } catch (error) {
+      if (!options.quiet) {
+        console.warn(`vite-bundled-i18n: failed to remove ${target}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  if (!options.quiet) {
+    if (removed.length > 0) {
+      console.log(`Removed ${removed.length} path(s):`);
+      for (const p of removed) console.log(`  ${p}`);
+    } else if (rejected.length === 0) {
+      console.log('Nothing to clean.');
+    }
+    for (const r of rejected) {
+      console.warn(
+        `vite-bundled-i18n: refusing to remove "${r}" — resolves outside rootDir (${rootDir}). ` +
+        `If this is intentional, pass allowOutsideRoot: true.`,
+      );
+    }
+  }
+
+  return { removed, missing, rejected };
+}
+
+/**
+ * `rebuild` — `clean` + `build`. The instinctive recovery move when a
+ * per-scope bundle has gone stale; documented as such in the README's
+ * troubleshooting section.
+ *
+ * Accepts both `CleanOptions` (for the wipe step) and `CliConfig` (for
+ * the build step). The clean step always runs first so the build always
+ * sees a fresh `.i18n/` directory.
+ */
+export function rebuild(config: CliConfig, cleanOptions?: Omit<CleanOptions, 'rootDir' | 'outDir'>): void {
+  const { rootDir, outDir } = resolveConfig(config);
+  clean({
+    rootDir,
+    outDir,
+    extraPaths: cleanOptions?.extraPaths,
+    allowOutsideRoot: cleanOptions?.allowOutsideRoot,
+    quiet: cleanOptions?.quiet,
+  });
+  build(config);
+}
+
+// Re-export the build-stamp filename so the CLI entry can include it in
+// `--help` output if it ever wants to.
+export { BUILD_STAMP_FILE_NAME };
+
+/**
+ * Run staleness detection without modifying anything. Used by the CLI
+ * `doctor` command (when added) and by tests that want to assert the
+ * staleness signal directly.
+ */
+export function inspectStaleness(config: CliConfig): ReturnType<typeof detectStaleness> {
+  const { rootDir, outDir } = resolveConfig(config);
+  const cacheSettings = resolveCacheConfig(config.cache, { rootDir });
+  return detectStaleness({
+    generatedOutDir: outDir,
+    cacheFilePath: path.join(cacheSettings.dir, CACHE_FILE_NAME),
+    pluginVersion: PLUGIN_VERSION,
+    configHash: computeConfigHash({
+      pages: config.pages,
+      defaultLocale: config.defaultLocale,
+      extractionScope: config.extractionScope ?? 'global',
+      hookSources: config.hookSources,
+      keyFields: config.keyFields,
+      dictionaries: config.dictionaries,
+      crossNamespacePacking: config.crossNamespacePacking,
+    }),
+  });
 }

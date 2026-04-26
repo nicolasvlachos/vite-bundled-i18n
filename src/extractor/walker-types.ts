@@ -18,6 +18,12 @@ export interface WalkerOptions {
   /** Additional module specifiers that export `useI18n`. */
   hookSources?: string[];
   /**
+   * Additional property names to scan as translation key fields.
+   * Threaded through to `extractKeys`. Mirrors
+   * `I18nSharedConfig.extraction.keyFields`.
+   */
+  keyFields?: string[];
+  /**
    * Optional extraction cache. When provided, per-file AST parses are
    * skipped for entries whose mtime + size match disk. See
    * {@link ExtractionCache} and `createExtractionCache`.

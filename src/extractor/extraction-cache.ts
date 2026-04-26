@@ -3,11 +3,22 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { ExtractedKey } from './types';
 
-/** Cache file schema version. Bump when the {@link CacheFileEntry} shape changes. */
-export const CACHE_SCHEMA_VERSION = 1;
+/**
+ * Cache file schema version. Bump when:
+ * - the {@link CacheFileEntry} shape changes, OR
+ * - we ship a fix that downstream artifacts (manifest, per-scope bundles)
+ *   may have been corrupted by, so we want every existing on-disk cache
+ *   discarded as part of the upgrade.
+ *
+ * v2 (0.7.0): forced rotation following a report of stale downstream
+ * artifacts surviving incremental rebuilds. Bumping to v2 means the next
+ * load discards every v1 file unconditionally — equivalent to a one-time
+ * `rm -rf .i18n/cache` on upgrade, no manual step required.
+ */
+export const CACHE_SCHEMA_VERSION = 2;
 
-/** Relative filename inside the configured cache directory. */
-export const CACHE_FILE_NAME = 'extraction-v1.json';
+/** Relative filename inside the configured cache directory. Encodes the schema version so a v2 build never accidentally loads a v1 file. */
+export const CACHE_FILE_NAME = 'extraction-v2.json';
 
 /**
  * Per-file extraction snapshot stored in the cache.
@@ -111,11 +122,30 @@ export function createExtractionCache(options: ExtractionCacheOptions): Extracti
     debug: options.debug,
   });
 
-  function debugLog(message: string): void {
-    if (options.debug) {
-      console.warn(`[i18n-cache] ${message}`);
-    }
+  /**
+   * Structured-format debug logger. Every line carries the PID and an
+   * ISO-8601 timestamp so a future investigation can correlate cache
+   * activity across processes (e.g. `vite dev` running while
+   * `npm run build` fires) without guessing.
+   *
+   * Enabled by `VITE_I18N_CACHE_DEBUG=1` (resolved upstream into
+   * `options.debug`). Off by default — production builds are silent.
+   */
+  function debugLog(action: string, detail: Record<string, unknown> = {}): void {
+    if (!options.debug) return;
+    const stamp = new Date().toISOString();
+    const fields = Object.entries(detail)
+      .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+      .join(' ');
+    console.warn(`[i18n-cache pid=${process.pid} ${stamp}] ${action}${fields ? ' ' + fields : ''}`);
   }
+
+  debugLog('init', {
+    file: filePath,
+    loadedEntries: entries.size,
+    pluginVersion: options.pluginVersion,
+    configHash: options.configHash.slice(0, 12),
+  });
 
   return {
     get(filePath) {
@@ -128,10 +158,13 @@ export function createExtractionCache(options: ExtractionCacheOptions): Extracti
 
     invalidate(filePath) {
       entries.delete(filePath);
+      debugLog('invalidate', { file: filePath });
     },
 
     clear() {
+      const before = entries.size;
       entries.clear();
+      debugLog('clear', { droppedEntries: before });
     },
 
     size() {
@@ -151,7 +184,7 @@ export function createExtractionCache(options: ExtractionCacheOptions): Extracti
       try {
         fs.mkdirSync(options.dir, { recursive: true });
       } catch (error) {
-        debugLog(`mkdir failed at ${options.dir}: ${(error as Error).message}`);
+        debugLog('persist-failed', { stage: 'mkdir', dir: options.dir, error: (error as Error).message });
         return;
       }
 
@@ -159,9 +192,14 @@ export function createExtractionCache(options: ExtractionCacheOptions): Extracti
       try {
         fs.writeFileSync(tmpPath, JSON.stringify(payload));
         fs.renameSync(tmpPath, filePath);
-        debugLog(`persisted ${entries.size} entries to ${filePath}`);
+        // Re-stat after the rename so the logged mtime matches what
+        // the next build's `detectStaleness` will see. Useful when a
+        // racing process touches the file between rename and stat.
+        let mtimeMs: number | null = null;
+        try { mtimeMs = fs.statSync(filePath).mtimeMs; } catch { /* swallow */ }
+        debugLog('persist', { file: filePath, entries: entries.size, mtimeMs });
       } catch (error) {
-        debugLog(`write failed: ${(error as Error).message}`);
+        debugLog('persist-failed', { stage: 'write', error: (error as Error).message });
         try { fs.rmSync(tmpPath, { force: true }); } catch { /* swallow */ }
       }
     },
@@ -192,19 +230,26 @@ function loadEntriesOrEmpty(
     parsed = JSON.parse(raw) as Partial<CacheFile>;
   } catch {
     if (context.debug) {
-      console.warn(`[i18n-cache] corrupt cache file at ${filePath}; starting empty`);
+      console.warn(`[i18n-cache pid=${process.pid} ${new Date().toISOString()}] load-rejected reason=corrupt-json file=${filePath}`);
     }
     return empty;
   }
 
-  if (!parsed || typeof parsed !== 'object') return empty;
-  if (parsed.schemaVersion !== CACHE_SCHEMA_VERSION) return empty;
-  if (parsed.pluginVersion !== context.pluginVersion) return empty;
-  if (parsed.configHash !== context.configHash) return empty;
+  function reject(reason: string): Map<string, CacheFileEntry> {
+    if (context.debug) {
+      console.warn(`[i18n-cache pid=${process.pid} ${new Date().toISOString()}] load-rejected reason=${reason} file=${filePath}`);
+    }
+    return empty;
+  }
 
-  if (!isCompatibleNodeVersion(parsed.nodeVersion, context.nodeVersion)) return empty;
+  if (!parsed || typeof parsed !== 'object') return reject('not-object');
+  if (parsed.schemaVersion !== CACHE_SCHEMA_VERSION) return reject(`schema-version-mismatch (got=${String(parsed.schemaVersion)} want=${CACHE_SCHEMA_VERSION})`);
+  if (parsed.pluginVersion !== context.pluginVersion) return reject(`plugin-version-mismatch (got=${String(parsed.pluginVersion)} want=${context.pluginVersion})`);
+  if (parsed.configHash !== context.configHash) return reject('config-hash-mismatch');
 
-  if (!parsed.files || typeof parsed.files !== 'object') return empty;
+  if (!isCompatibleNodeVersion(parsed.nodeVersion, context.nodeVersion)) return reject(`node-version-mismatch (got=${String(parsed.nodeVersion)} want=${context.nodeVersion})`);
+
+  if (!parsed.files || typeof parsed.files !== 'object') return reject('no-files');
 
   const map = new Map<string, CacheFileEntry>();
   for (const [key, value] of Object.entries(parsed.files)) {
