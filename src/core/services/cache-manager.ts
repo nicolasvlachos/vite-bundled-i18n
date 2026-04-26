@@ -315,17 +315,21 @@ function countLeaves(data: NestedTranslations | null | undefined): number {
  *
  * @param config - Cache and dictionary configuration subset.
  * @param options - Optional flags.
- * @param options.devNamespaceMode - When `true`, scopes are considered loaded
- *   if their root namespace is loaded (used in dev mode without a resolveUrl).
+ * @param options.devNamespaceMode - Reserved for backward compatibility.
+ *   Pre-v0.7.1 this enabled "scope is loaded if its namespace is loaded"
+ *   semantics for dev mode. With lean-bundle dev (the v0.6.1+ default)
+ *   that inference is unsound — scopes sharing a namespace receive
+ *   different tree-shaken slices — so the flag is now a no-op. Kept on
+ *   the signature to avoid breaking any test harness that passes it.
  * @returns A configured {@link CacheManager}.
  */
 export function createCacheManager(
   config: CacheManagerConfig = {},
-  options: { devNamespaceMode?: boolean } = {},
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- see JSDoc above
+  _options: { devNamespaceMode?: boolean } = {},
 ): CacheManager {
   const store = createStore();
   const runtimeCache = resolveRuntimeCache(config);
-  const devNamespaceMode = options.devNamespaceMode ?? false;
 
   const loadedScopes = new Set<string>();
   const emptyLoadedScopes = new Set<string>();
@@ -422,9 +426,15 @@ export function createCacheManager(
     },
 
     isScopeLoaded(locale, scope) {
-      if (devNamespaceMode && store.hasNamespace(locale, inferNamespace(scope))) {
-        return true;
-      }
+      // NOTE (v0.7.1): the previous "if devNamespaceMode AND store has
+      // the inferred namespace then return true" short-circuit was
+      // removed. It dated to when dev shipped full namespaces; with
+      // lean bundles (the v0.6.1+ default), namespace presence in the
+      // store no longer implies that THIS specific scope's keys are
+      // present — two scopes sharing a namespace get different tree-
+      // shaken slices. The scope-keyed `loadedScopes` set is now the
+      // single source of truth for "has this exact scope been loaded?"
+      // — symmetric with how production scope-id bundles already work.
       const key = compositeKey(locale, scope);
       return loadedScopes.has(key) && (
         emptyLoadedScopes.has(key) || scopeHasStoredData(locale, scope)

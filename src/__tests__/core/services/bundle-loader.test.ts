@@ -309,14 +309,40 @@ describe('createBundleLoader', () => {
       expect(mockFetch).toHaveBeenCalledWith('/__i18n/en/_scope/products.json');
     });
 
-    it('reuses loaded namespace and skips fetch for subkey scope', async () => {
-      // Pre-load the namespace
-      cache.addResources('en', 'products', { show: { title: 'Details' } });
+    /**
+     * v0.7.1 behavior change. Previously the loader short-circuited
+     * loadScope(scope) when the inferred namespace was present in the
+     * store — under the assumption (true pre-v0.6.1) that namespace-
+     * loaded meant the full namespace was available. With lean dev
+     * bundles, that assumption is wrong: scope A's load brings in only
+     * A's tree-shaken slice of the namespace, so scope B requires a
+     * fresh fetch to get its own slice.
+     *
+     * The test below was previously asserting the bug ("skips fetch")
+     * and has been inverted to lock in the fix ("always fetches when
+     * the scope hasn't been explicitly marked loaded").
+     */
+    it('always fetches a scope even if its namespace has data from a sibling scope (lean-bundle correctness)', async () => {
+      // Pre-load partial namespace data from a sibling scope's response
+      // (simulates the cross-namespace pack from a different scope).
+      cache.addResources('en', 'products', { suggestions: { x: 'X' } });
+
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ products: { show: { title: 'Details' } } }),
+      );
 
       await devLoader.loadScope('en', 'products.show');
 
-      expect(mockFetch).not.toHaveBeenCalled();
+      // Must have fetched — partial namespace data from a different
+      // scope is not sufficient evidence that products.show's keys
+      // are present.
+      expect(mockFetch).toHaveBeenCalledWith('/__i18n/en/_scope/products.json');
       expect(cache.isScopeLoaded('en', 'products.show')).toBe(true);
+      // Sibling slice survived the load (deep-merge, not overwrite).
+      expect(cache.getResource('en', 'products')).toMatchObject({
+        suggestions: { x: 'X' },
+        show: { title: 'Details' },
+      });
     });
   });
 

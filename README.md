@@ -683,7 +683,9 @@ app.use(createI18nTestPlugin(i18n))
 
 ## Releases
 
-Current release: **v0.7.0** — three loosely-related shipments:
+Current release: **v0.7.1** — bugfix release. Dev-mode `loadScope` no longer dedupes by inferred namespace (was unsound under `bundling.dev.leanBundles: true` — the v0.6.1+ default). When two scopes share a namespace and each receives a different tree-shaken slice from the dev plugin, the second scope's load now correctly fetches and deep-merges instead of short-circuiting on namespace presence. Same fix applied to `isScopeLoaded`. Production unaffected (per-scope-id URLs avoid the collision by construction).
+
+Built on **v0.7.0** — three loosely-related shipments:
 
 - **Build-stamp + staleness detection.** Every successful build writes `.i18n/build-stamp.json` recording the cache mtime it observed; the next build compares against that anchor (not against the stamp file's own mtime, so multi-minute builds and dev sessions no longer look stale). Cache schema bumped v1 → v2 (one-time auto-invalidation on upgrade). New CLI commands `clean` and `rebuild` formalize the recovery path; `--extra-path` is constrained to paths inside `rootDir` unless `--allow-outside-root` is set.
 - **ESLint plugin.** `vite-bundled-i18n/eslint` ships 5 rules (`no-t-dynamic`, `no-non-literal-t-arg`, `no-renamed-t`, `no-member-access-t`, `t-arg-must-exist-in-types`) with both `recommended` (warn) and `strict` (error + `t-arg-must-exist-in-types` enabled) presets. Both flat-config (ESLint 9+) and legacy (ESLint 8) shapes. Bracket-access variants (`t['dynamic']`, `props['t']`) are covered alongside dot access.

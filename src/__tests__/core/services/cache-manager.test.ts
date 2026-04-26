@@ -244,18 +244,41 @@ describe('createCacheManager', () => {
       devCm = createCacheManager({}, { devNamespaceMode: true });
     });
 
-    it('recognizes scopes as loaded when namespace is loaded', () => {
+    /**
+     * v0.7.1 behavior change: in dev mode, `isScopeLoaded` no longer
+     * returns true just because the inferred namespace is present in
+     * the store. With `bundling.dev.leanBundles: true` (the default
+     * since v0.6.1), two scopes sharing a namespace receive different
+     * tree-shaken slices — so namespace-presence-as-scope-completeness
+     * was a silent data-loss bug. The scope-keyed `loadedScopes` set
+     * is now the single source of truth.
+     *
+     * The previous tests asserting the bug as a feature have been
+     * inverted to lock in the fix.
+     */
+    it('does NOT recognize a scope as loaded just because its namespace has SOME data', () => {
       devCm.addResources('en', 'products', { show: { title: 'Details' } });
-      expect(devCm.isScopeLoaded('en', 'products.show')).toBe(true);
+      // The namespace is present, but the scope was never marked
+      // loaded — the runtime must fetch to learn what THIS scope needs.
+      expect(devCm.isScopeLoaded('en', 'products.show')).toBe(false);
+      expect(devCm.isScopeLoaded('en', 'products.list')).toBe(false);
     });
 
-    it('recognizes root scope as loaded when namespace is loaded', () => {
+    it('does NOT recognize a root scope as loaded just because its namespace has SOME data', () => {
       devCm.addResources('en', 'shared', { ok: 'OK' });
-      expect(devCm.isScopeLoaded('en', 'shared')).toBe(true);
+      expect(devCm.isScopeLoaded('en', 'shared')).toBe(false);
     });
 
     it('does not recognize scope when namespace is absent', () => {
       expect(devCm.isScopeLoaded('en', 'products.show')).toBe(false);
+    });
+
+    it('recognizes scope as loaded after explicit markScopeLoaded (the canonical path)', () => {
+      devCm.addResources('en', 'products', { show: { title: 'Details' } });
+      devCm.markScopeLoaded('en', 'products.show');
+      expect(devCm.isScopeLoaded('en', 'products.show')).toBe(true);
+      // Sibling scope not marked → still false even though namespace is shared.
+      expect(devCm.isScopeLoaded('en', 'products.list')).toBe(false);
     });
   });
 

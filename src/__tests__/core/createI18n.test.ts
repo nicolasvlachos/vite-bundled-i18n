@@ -375,9 +375,14 @@ describe('createI18n', () => {
     expect(instance.translate('en', 'vendors.full.bio')).toBe('Bio');
   });
 
-  it('uses namespace-backed scope bundles in dev mode and reuses loaded namespaces across scopes', async () => {
+  it('uses namespace-backed scope bundles in dev mode; sibling scopes refetch (lean-bundle correctness, v0.7.1)', async () => {
     (globalThis as typeof globalThis & { __VITE_I18N_DEV__?: boolean }).__VITE_I18N_DEV__ = true;
 
+    // Both fetches go to the same /__i18n/en/_scope/products.json URL
+    // — but in lean-bundle dev mode the dev plugin returns the scope-
+    // specific tree-shaken slice each time. The runtime must NOT
+    // short-circuit the second call just because the namespace bucket
+    // already has data from the first.
     vi.mocked(globalThis.fetch).mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({
@@ -391,14 +396,21 @@ describe('createI18n', () => {
     const instance = createI18n(baseConfig);
 
     await instance.loadScope('en', 'products.show');
-
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith('/__i18n/en/_scope/products.json');
-    expect(instance.isScopeLoaded('en', 'products.index')).toBe(true);
 
+    // After scope `products.show` loads, sibling `products.index`
+    // is NOT considered loaded — the runtime can't infer scope-level
+    // completeness from namespace presence alone.
+    expect(instance.isScopeLoaded('en', 'products.show')).toBe(true);
+    expect(instance.isScopeLoaded('en', 'products.index')).toBe(false);
+
+    // Loading the sibling triggers a fresh fetch (its lean slice may
+    // differ). The store deep-merges, so both scopes' data coexists.
     await instance.loadScope('en', 'products.index');
-
-    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(2);
+    expect(instance.isScopeLoaded('en', 'products.index')).toBe(true);
     expect(instance.translate('en', 'products.index.heading')).toBe('All Products');
+    expect(instance.translate('en', 'products.show.title')).toBe('Details');
   });
 
   it('tracks key usage for dev diagnostics', () => {

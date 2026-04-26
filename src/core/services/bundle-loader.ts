@@ -238,11 +238,24 @@ export function createBundleLoader(
 
     if (cache.isScopeLoaded(locale, scope)) return;
 
-    // In dev namespace mode, reuse an already-loaded namespace
-    if (devNamespaceMode && cache.isNamespaceLoaded(locale, namespace)) {
-      cache.markScopeLoaded(locale, scope, true);
-      return;
-    }
+    // NOTE (v0.7.1): the previous "if devNamespaceMode AND namespace
+    // already loaded then mark scope loaded and return" optimization was
+    // removed. It dated to when dev shipped full namespaces (pre-v0.6.1)
+    // — back then, namespace-loaded-by-A genuinely meant the full
+    // namespace was in the store, so scope B could reuse it. With
+    // `bundling.dev.leanBundles: true` (the default since v0.6.1) the
+    // dev plugin tree-shakes per scope: scope A's `_scope/{namespace}`
+    // response only contains the slice A needed (cross-ns extras for A's
+    // route), and scope B requesting the same namespace gets a DIFFERENT
+    // tree-shaken slice (the union across all scopes sharing that primary
+    // namespace, which includes B's keys). Short-circuiting on
+    // namespace-loaded silently returned with B's keys missing from the
+    // store. Now we always go through the fetch path; the existing
+    // `inFlightScopeLoads` dedup + `loadedScopes` Set + the store's
+    // deep-merge in `mergeTranslations` together produce correct
+    // behavior with no measurable regression in the full-namespace case
+    // (one extra HTTP fetch returning identical bytes that deep-merge
+    // to a no-op).
 
     const inFlight = inFlightScopeLoads.get(scopeKey);
     if (inFlight) return inFlight;
