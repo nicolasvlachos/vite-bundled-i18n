@@ -212,7 +212,7 @@ describe('detectStaleness', () => {
     });
     expect(r?.reason).toBe('plugin-version-changed');
     expect(r?.message).toMatch(/0\.6\.2/);
-    expect(r?.message).toMatch(/0\.6\.3/);
+    expect(r?.message).toMatch(/0\.7\.0/);
   });
 
   it('flags config-changed', () => {
