@@ -56,11 +56,17 @@ export function useI18n(scope?: ValidScope): UseI18nResult {
     let cancelled = false;
     const requestLocale = locale;
 
-    instance.loadScope(requestLocale, scope).then(() => {
-      if (!cancelled && instance.getLocale() === requestLocale) {
-        setScopeVersion((v) => v + 1);
-      }
-    });
+    instance.loadScope(requestLocale, scope)
+      .then(() => {
+        if (!cancelled && instance.getLocale() === requestLocale) {
+          setScopeVersion((v) => v + 1);
+        }
+      })
+      .catch(() => {
+        if (!cancelled && instance.getLocale() === requestLocale) {
+          setScopeVersion((v) => v + 1);
+        }
+      });
 
     return () => { cancelled = true; };
   }, [scope, scopeReady, locale, instance]);

@@ -101,6 +101,31 @@ describe('generate', () => {
     expect(typesContent).toContain(`'products.index': true;`);
     expect(typesContent).not.toContain(`'ProductsPage': true;`);
   });
+
+  it('honors dictionary ownership when generating JSON bundles', () => {
+    const config = makeConfig({
+      dictionaries: {
+        global: { include: ['shared.*'] },
+      },
+    });
+
+    generate(config);
+
+    const scopeBundle = JSON.parse(
+      fs.readFileSync(path.join(config.outDir!, 'en/products.index.json'), 'utf-8'),
+    );
+    const dictionaryBundle = JSON.parse(
+      fs.readFileSync(path.join(config.outDir!, 'en/_dict/global.json'), 'utf-8'),
+    );
+
+    expect(scopeBundle.products).toEqual({ index: { heading: 'All Products' } });
+    expect(scopeBundle.shared).toBeUndefined();
+    expect(dictionaryBundle.shared).toEqual({
+      ok: 'OK',
+      cancel: 'Cancel',
+      loading: 'Loading...',
+    });
+  });
 });
 
 describe('report', () => {

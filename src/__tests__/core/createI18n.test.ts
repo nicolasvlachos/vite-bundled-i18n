@@ -24,6 +24,7 @@ describe('createI18n', () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     delete (globalThis as typeof globalThis & { __VITE_I18N_DEV__?: boolean }).__VITE_I18N_DEV__;
+    vi.restoreAllMocks();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -579,7 +580,7 @@ describe('createI18n', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const instance = createI18n(baseConfig);
-    await instance.loadNamespaces('en', ['shared']);
+    await expect(instance.loadNamespaces('en', ['shared'])).rejects.toThrow('Network error');
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy.mock.calls[0][0]).toContain('Cannot load translations');
@@ -652,7 +653,7 @@ describe('createI18n', () => {
     } as Response);
 
     const instance = createI18n(baseConfig);
-    await instance.loadScope('en', 'some.scope');
+    await expect(instance.loadScope('en', 'some.scope')).rejects.toThrow();
 
     expect(instance.isScopeLoaded('en', 'some.scope')).toBe(false);
     expect(errorSpy).toHaveBeenCalledTimes(1);
@@ -678,8 +679,8 @@ describe('createI18n', () => {
       },
     });
 
-    await instance.loadAllDictionaries('en');
-    await instance.loadScope('en', 'products.index');
+    await expect(instance.loadAllDictionaries('en')).rejects.toThrow();
+    await expect(instance.loadScope('en', 'products.index')).rejects.toThrow();
 
     // Should emit exactly one consolidated error, not 3 separate warnings
     expect(errorSpy).toHaveBeenCalledTimes(1);
@@ -740,7 +741,7 @@ describe('createI18n', () => {
   it('loadScope releases the gate even when the fetch fails', async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error('boom'));
     const instance = createI18n(baseConfig);
-    await instance.loadScope('en', 'products.index');
+    await expect(instance.loadScope('en', 'products.index')).rejects.toThrow('boom');
     expect(instance.gate.ready).toBe(true);
   });
 

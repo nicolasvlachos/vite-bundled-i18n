@@ -297,7 +297,7 @@ scopeMap.invalidate()                   // clears cache; next access re-fetches
 
 - Concurrent `load()` calls share a single in-flight promise.
 - `invalidate()` during a pending fetch uses a generation counter so the stale response can't populate the cache.
-- On fetch failure the in-flight entry clears, so retries start fresh.
+- On fetch failure the shared promise rejects and the in-flight entry clears, so retries start fresh.
 - Default URL honors the plugin-injected `__VITE_I18N_BASE__` define so subdirectory deploys (Laravel sidecar, `base: '/admin/'`) resolve without wiring.
 
 Options:
@@ -556,9 +556,9 @@ Gated by `emitReports` at build time (static file is skipped when reports are di
 
 `instance.loadScope(locale, scope)` guarantees:
 
-- Concurrent calls for the same `(locale, scope)` share a single in-flight promise. One hundred parallel `loadScope('en', 'products')` calls fire exactly one HTTP request and resolve together.
+- Concurrent calls for the same `(locale, scope)` share a single in-flight promise. One hundred parallel `loadScope('en', 'products')` calls fire exactly one HTTP request and resolve or reject together.
 - An already-loaded scope returns a resolved promise (microtask) — no network.
-- On fetch failure the in-flight entry is cleared so a retry starts fresh.
+- On fetch failure the promise rejects and the in-flight entry is cleared so a retry starts fresh.
 
 This makes it safe to call `loadScope` from inside your router's async resolve hook without coordinating across components. Side effects (cache writes, `setActiveScope`, diagnostics) run once per logical load, not once per caller.
 

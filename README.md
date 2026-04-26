@@ -236,7 +236,7 @@ async function resolvePage(
 }
 ```
 
-Calling `loadScope` is safe from concurrent paths. The runtime deduplicates by `(locale, scope)` — 100 parallel calls fire exactly one fetch, share the same promise, and resolve together. On fetch failure the in-flight entry clears, so a retry starts fresh. Side effects (cache writes, devbar state, dependent scope flags) run once per logical load, not once per caller.
+Calling `loadScope` is safe from concurrent paths. The runtime deduplicates by `(locale, scope)` — 100 parallel calls fire exactly one fetch and share the same promise. On fetch failure, that promise rejects and the in-flight entry clears, so a retry starts fresh. Side effects (cache writes, devbar state, dependent scope flags) run once per logical load, not once per caller.
 
 **Page identifiers.** The default strips `src/pages/` and common `.tsx` / `.page.tsx` suffixes:
 

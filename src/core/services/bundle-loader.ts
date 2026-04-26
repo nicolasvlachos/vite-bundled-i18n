@@ -79,6 +79,7 @@ export interface BundleLoader {
    * Fetches `/{i18nBase}/{locale}/_dict/{name}.json` — one HTTP request
    * containing all namespaces for that dictionary. Deduplicates concurrent
    * calls for the same dictionary.
+   * Rejects when the fetch or compiled import fails.
    *
    * @param locale - Target locale code.
    * @param name - Dictionary name from the config.
@@ -101,6 +102,7 @@ export interface BundleLoader {
    * Fetches `/{i18nBase}/{locale}/{scope}.json` — one HTTP request
    * containing all namespaces needed by that page. In dev namespace mode,
    * the URL uses `/_scope/{namespace}` instead. Deduplicates concurrent calls.
+   * Rejects when the fetch or compiled import fails.
    *
    * @param locale - Target locale code.
    * @param scope - Scope identifier (e.g. `"products"` or `"products.show"`).
@@ -112,6 +114,7 @@ export interface BundleLoader {
    *
    * Fetches each namespace from `{localesDir}/{locale}/{namespace}.json`.
    * Skips namespaces already present in the cache.
+   * Rejects on the first namespace fetch failure.
    *
    * @param locale - Target locale code.
    * @param namespaces - Array of namespace names to load.
@@ -212,8 +215,9 @@ export function createBundleLoader(
         }
         cache.markDictionaryLoaded(locale, name);
         cache.evictUnused(locale);
-      } catch {
+      } catch (error) {
         handleFetchError();
+        throw error;
       }
     })().finally(() => {
       inFlightDictionaryLoads.delete(dictKey);
@@ -289,8 +293,9 @@ export function createBundleLoader(
         }
         cache.markScopeLoaded(locale, scope, true);
         cache.evictUnused(locale);
-      } catch {
+      } catch (error) {
         handleFetchError();
+        throw error;
       }
     })().finally(() => {
       inFlightScopeLoads.delete(scopeKey);
@@ -317,8 +322,9 @@ export function createBundleLoader(
             pinned: false,
           });
           cache.evictUnused(locale);
-        } catch {
+        } catch (error) {
           handleFetchError();
+          throw error;
         }
       }
     }

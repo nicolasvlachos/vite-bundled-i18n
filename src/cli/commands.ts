@@ -333,6 +333,7 @@ export function generate(config: CliConfig): void {
     localesDir,
     locales: config.locales,
     outDir,
+    dictionaries: config.dictionaries,
     crossNamespacePacking: config.crossNamespacePacking,
   });
 
@@ -428,6 +429,7 @@ export function build(config: CliConfig): void {
     localesDir,
     locales: config.locales,
     outDir,
+    dictionaries: config.dictionaries,
     crossNamespacePacking: config.crossNamespacePacking,
   });
 

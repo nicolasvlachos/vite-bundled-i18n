@@ -171,7 +171,7 @@ describe('createBundleLoader', () => {
     it('clears the in-flight entry on fetch failure so the next call fires a fresh fetch', async () => {
       // First attempt: fetch rejects.
       mockFetch.mockRejectedValueOnce(new Error('network down'));
-      await loader.loadScope('en', 'products');
+      await expect(loader.loadScope('en', 'products')).rejects.toThrow('network down');
       expect(mockFetch).toHaveBeenCalledTimes(1);
       expect(cache.isScopeLoaded('en', 'products')).toBe(false);
 
@@ -351,7 +351,7 @@ describe('createBundleLoader', () => {
     it('calls onFetchError on dictionary fetch failure', async () => {
       mockFetch.mockResolvedValueOnce(failResponse(500));
 
-      await loader.loadDictionary('en', 'core');
+      await expect(loader.loadDictionary('en', 'core')).rejects.toThrow();
 
       expect(onFetchError).toHaveBeenCalledOnce();
     });
@@ -359,7 +359,7 @@ describe('createBundleLoader', () => {
     it('calls onFetchError on scope fetch failure', async () => {
       mockFetch.mockResolvedValueOnce(failResponse(500));
 
-      await loader.loadScope('en', 'products');
+      await expect(loader.loadScope('en', 'products')).rejects.toThrow();
 
       expect(onFetchError).toHaveBeenCalledOnce();
     });
@@ -367,7 +367,7 @@ describe('createBundleLoader', () => {
     it('calls onFetchError on namespace fetch failure', async () => {
       mockFetch.mockResolvedValueOnce(failResponse(500));
 
-      await loader.loadNamespaces('en', ['shared']);
+      await expect(loader.loadNamespaces('en', ['shared'])).rejects.toThrow();
 
       expect(onFetchError).toHaveBeenCalledOnce();
     });
@@ -375,9 +375,9 @@ describe('createBundleLoader', () => {
     it('calls onFetchError only once across multiple failures', async () => {
       mockFetch.mockResolvedValue(failResponse(500));
 
-      await loader.loadDictionary('en', 'core');
-      await loader.loadScope('en', 'products');
-      await loader.loadNamespaces('en', ['shared']);
+      await expect(loader.loadDictionary('en', 'core')).rejects.toThrow();
+      await expect(loader.loadScope('en', 'products')).rejects.toThrow();
+      await expect(loader.loadNamespaces('en', ['shared'])).rejects.toThrow();
 
       expect(onFetchError).toHaveBeenCalledOnce();
     });

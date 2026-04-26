@@ -129,10 +129,15 @@ export function useI18n(scope?: string): UseI18nReturn {
     }
 
     if (promises.length > 0) {
-      Promise.all(promises).then(() => {
-        ready.value = computeReady();
-        refresh();
-      });
+      Promise.all(promises)
+        .then(() => {
+          ready.value = computeReady();
+          refresh();
+        })
+        .catch(() => {
+          ready.value = computeReady();
+          refresh();
+        });
     }
   });
 

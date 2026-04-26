@@ -419,18 +419,21 @@ export interface I18nInstance {
    * Loads namespace JSON files for a locale via fetch and adds them to the store.
    * Skips namespaces already present in the store.
    * Prefer `loadDictionaries` and `loadScope` for bundled loading.
+   * Rejects when any namespace fetch fails.
    */
   loadNamespaces: (locale: string, namespaces: string[]) => Promise<void>;
 
   /**
    * Loads a named dictionary bundle for a locale.
    * One HTTP request per dictionary: `/__i18n/{locale}/_dict/{name}.json`
+   * Rejects when the dictionary fetch fails.
    */
   loadDictionary: (locale: string, name: string) => Promise<void>;
 
   /**
    * Loads all configured dictionaries for a locale, in declaration order.
    * One HTTP request per dictionary name.
+   * Rejects when any dictionary fetch fails.
    */
   loadAllDictionaries: (locale: string) => Promise<void>;
 
@@ -443,6 +446,9 @@ export interface I18nInstance {
    * `useGate()`) read from. Pass `{ trackReadiness: false }` to skip
    * registration — use this only when you have an explicit orchestration
    * layer that already gates rendering independently.
+   *
+   * Rejects when the scope fetch fails. The readiness gate is released in
+   * both success and failure cases.
    */
   loadScope: (
     locale: string,

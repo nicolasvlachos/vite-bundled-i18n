@@ -640,6 +640,45 @@ describe('i18nDevPlugin', () => {
     expect(map.pages['status/index'].scopes).toContain('status.dashboard');
   });
 
+  it('uses custom keyFields for dev lean bundles', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'locales/en/custom.json'),
+      JSON.stringify({
+        index: {
+          title: 'Custom title',
+          unused: 'Unused',
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/components/custom-data.ts'),
+      "export const rows = [{ messageKey: 'custom.index.title' }];\n",
+    );
+    fs.mkdirSync(path.join(tmpDir, 'src/pages/custom'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/pages/custom/index.tsx'),
+      [
+        "import { useI18n } from 'vite-bundled-i18n/react';",
+        "import { rows } from '../../components/custom-data';",
+        'export function CustomPage() {',
+        "  useI18n('custom.index');",
+        '  return <div>{rows.length}</div>;',
+        '}',
+      ].join('\n'),
+    );
+
+    const { middleware } = createPluginHarness(
+      { pages: ['src/pages/**/*.tsx'], defaultLocale: 'en' },
+      undefined,
+      { extraction: { keyFields: ['messageKey'] } },
+    );
+    const { response } = runMiddleware(middleware, '/__i18n/en/custom.index.json');
+    const body = JSON.parse(response.body);
+
+    expect(body.custom).toEqual({ index: { title: 'Custom title' } });
+    expect(body.custom.index.unused).toBeUndefined();
+  });
+
   it('honors custom pageIdentifier in the dev response', () => {
     const { middleware } = createPluginHarness({
       pages: ['src/pages/**/*.tsx'],

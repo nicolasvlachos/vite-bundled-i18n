@@ -164,10 +164,15 @@ export function I18nProvider({
     }
 
     if (promises.length > 0) {
-      Promise.all(promises).then(() => {
-        setDictsReady(areDictionariesReady(instance));
-        setVersion((v) => v + 1);
-      });
+      Promise.all(promises)
+        .then(() => {
+          setDictsReady(areDictionariesReady(instance));
+          setVersion((v) => v + 1);
+        })
+        .catch(() => {
+          setDictsReady(areDictionariesReady(instance));
+          setVersion((v) => v + 1);
+        });
     }
 
     return () => {

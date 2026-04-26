@@ -367,6 +367,7 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
         defaultLocale,
         extractionScope: options?.extractionScope ?? 'global',
         hookSources: config.extraction?.hookSources,
+        keyFields: config.extraction?.keyFields,
         cache: extractionCache,
       });
       if (config.bundling?.dynamicKeys && config.bundling.dynamicKeys.length > 0) {
@@ -430,6 +431,7 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
         defaultLocale,
         extractionScope: options?.extractionScope ?? 'global',
         hookSources: config.extraction?.hookSources,
+        keyFields: config.extraction?.keyFields,
         cache: extractionCache,
       });
       // Apply declared dynamic keys before building the scope map so dev
@@ -493,6 +495,7 @@ export function i18nDevPlugin(config: I18nDevPluginConfig, options?: I18nDevPlug
             defaultLocale,
             extractionScope: options?.extractionScope ?? 'global',
             hookSources: config.extraction?.hookSources,
+            keyFields: config.extraction?.keyFields,
             cache: extractionCache,
           });
         } catch {
